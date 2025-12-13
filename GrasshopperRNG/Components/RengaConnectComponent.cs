@@ -17,19 +17,10 @@ namespace GrasshopperRNG.Components
         private bool updateButtonPressed = false;
 
         public RengaConnectComponent()
-            : base("RNG", "RNG",
-                "Main node: Connect to Renga and manage data transmission",
-                "RNG", "Main")
+            : base("Renga Connect", "RengaConnect",
+                "Main: Connect to Renga and manage data transmission",
+                "Renga", "Main")
         {
-        }
-
-        public override void AppendAdditionalMenuItems(System.Windows.Forms.ToolStripDropDown menu)
-        {
-            base.AppendAdditionalMenuItems(menu);
-            menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-            var updateItem = new System.Windows.Forms.ToolStripMenuItem("Update - Refresh Connection");
-            updateItem.Click += (s, e) => OnUpdateButtonClick();
-            menu.Items.Add(updateItem);
         }
 
         public override void CreateAttributes()
@@ -68,7 +59,6 @@ namespace GrasshopperRNG.Components
             bool wasUpdatePressed = updateButtonPressed;
             updateButtonPressed = false;
 
-            // Always ensure client exists
             if (client == null)
             {
                 client = new RengaGhClient { Port = port };
@@ -76,7 +66,7 @@ namespace GrasshopperRNG.Components
             else if (client.Port != port)
             {
                 client.Disconnect();
-                client = new RengaGhClient { Port = port };
+                client.Port = port;
             }
 
             // Handle connection/disconnection
@@ -92,7 +82,7 @@ namespace GrasshopperRNG.Components
                 {
                     DA.SetData(0, false);
                     DA.SetData(1, $"Failed to connect to Renga on port {port}. Make sure Renga plugin is running.");
-                    DA.SetData(2, new RengaGhClientGoo(client)); // Still output client object
+                    DA.SetData(2, null);
                 }
             }
             else if (!connect && client.IsConnected)
@@ -100,7 +90,7 @@ namespace GrasshopperRNG.Components
                 client.Disconnect();
                 DA.SetData(0, false);
                 DA.SetData(1, "Disconnected from Renga");
-                DA.SetData(2, new RengaGhClientGoo(client)); // Still output client object
+                DA.SetData(2, null);
             }
             else if (wasUpdatePressed && client.IsConnected)
             {
@@ -111,10 +101,9 @@ namespace GrasshopperRNG.Components
             }
             else
             {
-                // Always output client, even if not connected (so Input component can see it)
                 DA.SetData(0, client.IsConnected);
                 DA.SetData(1, client.IsConnected ? "Connected" : "Not connected");
-                DA.SetData(2, new RengaGhClientGoo(client)); // Always output client object
+                DA.SetData(2, client.IsConnected ? new RengaGhClientGoo(client) : null);
             }
         }
 
@@ -127,7 +116,7 @@ namespace GrasshopperRNG.Components
             }
         }
 
-        public override Guid ComponentGuid => new Guid("7A8B9C0D-1E2F-3456-789A-BCDEF0123456");
+        public override Guid ComponentGuid => new Guid("6569e153-5300-47c4-a44e-418b4ebed893");
     }
 }
 

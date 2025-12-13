@@ -64,6 +64,8 @@
     <Compile Include="Components\RengaConnectComponentAttributes.cs" />
     <Compile Include="Components\RengaCreateColumnsComponent.cs" />
     <Compile Include="Components\RengaCreateColumnsComponentAttributes.cs" />
+    <Compile Include="Components\RengaGetWallsComponent.cs" />
+    <Compile Include="Components\RengaGetWallsComponentAttributes.cs" />
     <Compile Include="Components\RengaGhClientGoo.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Properties\GrasshopperInfo.cs" />
@@ -75,8 +77,8 @@
   <!-- Post-build event to copy to Grasshopper libraries -->
   <PropertyGroup>
     <PostBuildEvent>if not exist "%25APPDATA%\Grasshopper\Libraries" mkdir "%25APPDATA%\Grasshopper\Libraries"
-copy "$(TargetPath)" "%25APPDATA%\Grasshopper\Libraries\Renga_Grasshopper.gha"
-echo Renga_Grasshopper.gha copied to Grasshopper Libraries</PostBuildEvent>
+copy /Y "$(TargetPath)" "%25APPDATA%\Grasshopper\Libraries\GrasshopperRNG.gha"
+echo GrasshopperRNG.gha copied to Grasshopper Libraries</PostBuildEvent>
   </PropertyGroup>
 </Project>
 
