@@ -61,7 +61,6 @@ namespace GrasshopperRNG.Components
             pManager.AddGeometryParameter("Baselines", "BL", "Wall baselines (curves)", GH_ParamAccess.list);
             pManager.AddGeometryParameter("Meshes", "M", "Wall geometry as Mesh", GH_ParamAccess.list);
             pManager.AddNumberParameter("Thickness", "T", "Wall thickness", GH_ParamAccess.list);
-            pManager.AddTextParameter("Parameters", "P", "Wall parameters (JSON)", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -78,7 +77,6 @@ namespace GrasshopperRNG.Components
                 DA.SetDataList(4, new List<IGH_GeometricGoo>());
                 DA.SetDataList(5, new List<IGH_GeometricGoo>());
                 DA.SetDataList(6, new List<double>());
-                DA.SetDataList(7, new List<string>());
                 return;
             }
 
@@ -103,7 +101,6 @@ namespace GrasshopperRNG.Components
                 DA.SetDataList(4, new List<IGH_GeometricGoo>());
                 DA.SetDataList(5, new List<IGH_GeometricGoo>());
                 DA.SetDataList(6, new List<double>());
-                DA.SetDataList(7, new List<string>());
                 return;
             }
 
@@ -141,16 +138,15 @@ namespace GrasshopperRNG.Components
                 }
             }
 
-            if (client == null || !client.IsConnected)
+            if (client == null)
             {
                 DA.SetData(0, false);
-                DA.SetData(1, "Renga Connect is not connected. Connect to Renga first.");
+                DA.SetData(1, "Renga Connect component not provided. Connect to Renga first.");
                 DA.SetDataList(2, new List<int>());
                 DA.SetDataList(3, new List<string>());
                 DA.SetDataList(4, new List<IGH_GeometricGoo>());
                 DA.SetDataList(5, new List<IGH_GeometricGoo>());
                 DA.SetDataList(6, new List<double>());
-                DA.SetDataList(7, new List<string>());
                 return;
             }
 
@@ -161,16 +157,28 @@ namespace GrasshopperRNG.Components
                 timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
             };
 
-            // Send command to server
+            // Send command to server (Send() will create a new connection if needed)
             var json = JsonConvert.SerializeObject(command);
             var responseJson = client.Send(json);
+            
+            // Check if Send() failed to connect
+            if (string.IsNullOrEmpty(responseJson))
+            {
+                DA.SetData(0, false);
+                DA.SetData(1, "Failed to connect to Renga. Make sure Renga plugin is running and connected.");
+                DA.SetDataList(2, new List<int>());
+                DA.SetDataList(3, new List<string>());
+                DA.SetDataList(4, new List<IGH_GeometricGoo>());
+                DA.SetDataList(5, new List<IGH_GeometricGoo>());
+                DA.SetDataList(6, new List<double>());
+                return;
+            }
             
             var wallIds = new List<int>();
             var wallNames = new List<string>();
             var baselines = new List<IGH_GeometricGoo>();
             var meshes = new List<IGH_GeometricGoo>();
             var thicknesses = new List<double>();
-            var parameters = new List<string>();
             bool success = false;
             string message = "";
 
@@ -210,25 +218,36 @@ namespace GrasshopperRNG.Components
                             try
                             {
                                 var baselineObj = wall["baseline"] as JObject;
-                                if (baselineObj != null)
+                                if (baselineObj == null)
                                 {
-                                    var startPoint = baselineObj["startPoint"];
-                                    var endPoint = baselineObj["endPoint"];
+                                    System.Diagnostics.Debug.WriteLine($"Warning: baseline is null for wall {id}");
+                                    baselineGeo = null;
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"Processing baseline for wall {id}");
+                                    var startPoint = baselineObj["startPoint"] as JObject;
+                                    var endPoint = baselineObj["endPoint"] as JObject;
                                     var baselineType = baselineObj["type"]?.ToString() ?? "LineSegment";
+                                    System.Diagnostics.Debug.WriteLine($"  Baseline type: {baselineType}, startPoint: {startPoint != null}, endPoint: {endPoint != null}");
 
-                                    if (startPoint != null && endPoint != null)
-                                    {
-                                        double startX = startPoint["x"]?.Value<double>() ?? 0;
-                                        double startY = startPoint["y"]?.Value<double>() ?? 0;
-                                        double startZ = startPoint["z"]?.Value<double>() ?? 0;
-                                        double endX = endPoint["x"]?.Value<double>() ?? 0;
-                                        double endY = endPoint["y"]?.Value<double>() ?? 0;
-                                        double endZ = endPoint["z"]?.Value<double>() ?? 0;
+                                double startX = 0, startY = 0, startZ = 0;
+                                double endX = 0, endY = 0, endZ = 0;
+                                
+                                if (startPoint != null && endPoint != null)
+                                {
+                                    startX = startPoint["x"]?.Value<double>() ?? 0;
+                                    startY = startPoint["y"]?.Value<double>() ?? 0;
+                                    startZ = startPoint["z"]?.Value<double>() ?? 0;
+                                    endX = endPoint["x"]?.Value<double>() ?? 0;
+                                    endY = endPoint["y"]?.Value<double>() ?? 0;
+                                    endZ = endPoint["z"]?.Value<double>() ?? 0;
 
                                     // Check if we have sampled points (preferred for all curve types)
                                     var sampledPoints = baselineObj["sampledPoints"] as JArray;
                                     if (sampledPoints != null && sampledPoints.Count > 1)
                                     {
+                                        System.Diagnostics.Debug.WriteLine($"  Using {sampledPoints.Count} sampled points for baseline");
                                         // Use sampled points to create a polyline curve
                                         var polyline = new Polyline();
                                         foreach (var pt in sampledPoints)
@@ -239,12 +258,13 @@ namespace GrasshopperRNG.Components
                                             polyline.Add(px, py, pz);
                                         }
                                         baselineGeo = new GH_Curve(new PolylineCurve(polyline));
+                                        System.Diagnostics.Debug.WriteLine($"  Created polyline curve with {polyline.Count} points");
                                     }
                                     // If no sampled points, try to reconstruct based on type
                                     else if (baselineType == "Arc")
                                     {
                                         // Fallback to Arc reconstruction if sampled points not available
-                                        var center = baselineObj["center"];
+                                        var center = baselineObj["center"] as JObject;
                                         var radius = baselineObj["radius"]?.Value<double>() ?? 0;
                                         if (center != null)
                                         {
@@ -277,93 +297,92 @@ namespace GrasshopperRNG.Components
                                         }
                                     }
                                     else if (baselineType == "PolyCurve")
+                                    {
+                                        var segments = baselineObj["segments"] as JArray;
+                                        if (segments != null && segments.Count > 0)
                                         {
-                                            var segments = baselineObj["segments"] as JArray;
-                                            if (segments != null && segments.Count > 0)
+                                            var curves = new List<Rhino.Geometry.Curve>();
+                                            
+                                            // Start with first point
+                                            var currentPoint = new Point3d(startX, startY, startZ);
+                                            
+                                            int segmentIndex = 0;
+                                            foreach (var seg in segments)
                                             {
-                                                var curves = new List<Rhino.Geometry.Curve>();
+                                                var segType = seg["type"]?.ToString() ?? "LineSegment";
                                                 
-                                                // Start with first point
-                                                var currentPoint = new Point3d(startX, startY, startZ);
+                                                // Get 3D coordinates if available, otherwise use 2D with Z from start
+                                                double segStartX = seg["start3DX"]?.Value<double>() ?? seg["startX"]?.Value<double>() ?? 0;
+                                                double segStartY = seg["start3DY"]?.Value<double>() ?? seg["startY"]?.Value<double>() ?? 0;
+                                                double segStartZ = seg["start3DZ"]?.Value<double>() ?? startZ;
+                                                double segEndX = seg["end3DX"]?.Value<double>() ?? seg["endX"]?.Value<double>() ?? 0;
+                                                double segEndY = seg["end3DY"]?.Value<double>() ?? seg["endY"]?.Value<double>() ?? 0;
+                                                double segEndZ = seg["end3DZ"]?.Value<double>() ?? startZ;
                                                 
-                                                int segmentIndex = 0;
-                                                foreach (var seg in segments)
+                                                var segStartPt = new Point3d(segStartX, segStartY, segStartZ);
+                                                var segEndPt = new Point3d(segEndX, segEndY, segEndZ);
+                                                
+                                                // Use segment start point if current point is not set or different
+                                                if (segmentIndex == 0 || currentPoint.DistanceTo(segStartPt) > 0.001)
                                                 {
-                                                    var segType = seg["type"]?.ToString() ?? "LineSegment";
-                                                    
-                                                    // Get 3D coordinates if available, otherwise use 2D with Z from start
-                                                    double segStartX = seg["start3DX"]?.Value<double>() ?? seg["startX"]?.Value<double>() ?? 0;
-                                                    double segStartY = seg["start3DY"]?.Value<double>() ?? seg["startY"]?.Value<double>() ?? 0;
-                                                    double segStartZ = seg["start3DZ"]?.Value<double>() ?? startZ;
-                                                    double segEndX = seg["end3DX"]?.Value<double>() ?? seg["endX"]?.Value<double>() ?? 0;
-                                                    double segEndY = seg["end3DY"]?.Value<double>() ?? seg["endY"]?.Value<double>() ?? 0;
-                                                    double segEndZ = seg["end3DZ"]?.Value<double>() ?? startZ;
-                                                    
-                                                    var segStartPt = new Point3d(segStartX, segStartY, segStartZ);
-                                                    var segEndPt = new Point3d(segEndX, segEndY, segEndZ);
-                                                    
-                                                    // Use segment start point if current point is not set or different
-                                                    if (segmentIndex == 0 || currentPoint.DistanceTo(segStartPt) > 0.001)
-                                                    {
-                                                        currentPoint = segStartPt;
-                                                    }
-                                                    
-                                                    segmentIndex++;
-                                                    
-                                                    if (segType == "Arc")
-                                                    {
-                                                        // Handle Arc segment
-                                                        double center3DX = seg["center3DX"]?.Value<double>() ?? seg["centerX"]?.Value<double>() ?? 0;
-                                                        double center3DY = seg["center3DY"]?.Value<double>() ?? seg["centerY"]?.Value<double>() ?? 0;
-                                                        double center3DZ = seg["center3DZ"]?.Value<double>() ?? segStartZ;
-                                                        double radius = seg["radius"]?.Value<double>() ?? 0;
-                                                        
-                                                        var centerPt = new Point3d(center3DX, center3DY, center3DZ);
-                                                        
-                                                        var plane = new Plane(centerPt, Vector3d.ZAxis);
-                                                        var startVec = currentPoint - centerPt;
-                                                        var endVec = segEndPt - centerPt;
-                                                        double startAngle = Math.Atan2(startVec.Y, startVec.X);
-                                                        double endAngle = Math.Atan2(endVec.Y, endVec.X);
-                                                        
-                                                        var arc = new Arc();
-                                                        arc.Plane = plane;
-                                                        arc.Radius = radius;
-                                                        arc.StartAngle = startAngle;
-                                                        arc.EndAngle = endAngle;
-                                                        
-                                                        curves.Add(arc.ToNurbsCurve());
-                                                        currentPoint = segEndPt;
-                                                    }
-                                                    else
-                                                    {
-                                                        // Handle LineSegment
-                                                        var line = new Line(currentPoint, segEndPt);
-                                                        curves.Add(new LineCurve(line));
-                                                        currentPoint = segEndPt;
-                                                    }
+                                                    currentPoint = segStartPt;
                                                 }
                                                 
-                                                // Add final point if needed
-                                                var finalPoint = new Point3d(endX, endY, endZ);
-                                                if (currentPoint.DistanceTo(finalPoint) > 0.001)
+                                                segmentIndex++;
+                                                
+                                                if (segType == "Arc")
                                                 {
-                                                    var line = new Line(currentPoint, finalPoint);
+                                                    // Handle Arc segment
+                                                    double center3DX = seg["center3DX"]?.Value<double>() ?? seg["centerX"]?.Value<double>() ?? 0;
+                                                    double center3DY = seg["center3DY"]?.Value<double>() ?? seg["centerY"]?.Value<double>() ?? 0;
+                                                    double center3DZ = seg["center3DZ"]?.Value<double>() ?? segStartZ;
+                                                    double radius = seg["radius"]?.Value<double>() ?? 0;
+                                                    
+                                                    var centerPt = new Point3d(center3DX, center3DY, center3DZ);
+                                                    
+                                                    var plane = new Plane(centerPt, Vector3d.ZAxis);
+                                                    var startVec = currentPoint - centerPt;
+                                                    var endVec = segEndPt - centerPt;
+                                                    double startAngle = Math.Atan2(startVec.Y, startVec.X);
+                                                    double endAngle = Math.Atan2(endVec.Y, endVec.X);
+                                                    
+                                                    var arc = new Arc();
+                                                    arc.Plane = plane;
+                                                    arc.Radius = radius;
+                                                    arc.StartAngle = startAngle;
+                                                    arc.EndAngle = endAngle;
+                                                    
+                                                    curves.Add(arc.ToNurbsCurve());
+                                                    currentPoint = segEndPt;
+                                                }
+                                                else
+                                                {
+                                                    // Handle LineSegment
+                                                    var line = new Line(currentPoint, segEndPt);
                                                     curves.Add(new LineCurve(line));
+                                                    currentPoint = segEndPt;
                                                 }
-                                                
-                                                // Join all curves into one
-                                                if (curves.Count > 0)
+                                            }
+                                            
+                                            // Add final point if needed
+                                            var finalPoint = new Point3d(endX, endY, endZ);
+                                            if (currentPoint.DistanceTo(finalPoint) > 0.001)
+                                            {
+                                                var line = new Line(currentPoint, finalPoint);
+                                                curves.Add(new LineCurve(line));
+                                            }
+                                            
+                                            // Join all curves into one
+                                            if (curves.Count > 0)
+                                            {
+                                                var joinedCurves = Rhino.Geometry.Curve.JoinCurves(curves);
+                                                if (joinedCurves != null && joinedCurves.Length > 0)
                                                 {
-                                                    var joinedCurves = Rhino.Geometry.Curve.JoinCurves(curves);
-                                                    if (joinedCurves != null && joinedCurves.Length > 0)
-                                                    {
-                                                        baselineGeo = new GH_Curve(joinedCurves[0]);
-                                                    }
-                                                    else if (curves.Count == 1)
-                                                    {
-                                                        baselineGeo = new GH_Curve(curves[0]);
-                                                    }
+                                                    baselineGeo = new GH_Curve(joinedCurves[0]);
+                                                }
+                                                else if (curves.Count == 1)
+                                                {
+                                                    baselineGeo = new GH_Curve(curves[0]);
                                                 }
                                             }
                                         }
@@ -373,12 +392,36 @@ namespace GrasshopperRNG.Components
                                             baselineGeo = new GH_Line(line);
                                         }
                                     }
+                                    else
+                                    {
+                                        // Default: LineSegment
+                                        var line = new Line(new Point3d(startX, startY, startZ), new Point3d(endX, endY, endZ));
+                                        baselineGeo = new GH_Line(line);
+                                    }
+                                    
+                                    // Fallback: if no baseline was created, create a simple line from start/end points
+                                    if (baselineGeo == null)
+                                    {
+                                        var line = new Line(new Point3d(startX, startY, startZ), new Point3d(endX, endY, endZ));
+                                        baselineGeo = new GH_Line(line);
+                                    }
+                                }
+                                    else
+                                    {
+                                        // If startPoint or endPoint is null, create a null baseline
+                                        System.Diagnostics.Debug.WriteLine($"Warning: startPoint or endPoint is null for wall {id}");
+                                        baselineGeo = null;
+                                    }
                                 }
                             }
                             catch (Exception ex)
                             {
-                                System.Diagnostics.Debug.WriteLine($"Error parsing baseline: {ex.Message}");
+                                System.Diagnostics.Debug.WriteLine($"Error parsing baseline for wall {id}: {ex.Message}");
+                                System.Diagnostics.Debug.WriteLine($"  Stack trace: {ex.StackTrace}");
+                                baselineGeo = null;
                             }
+                            // Always add something, even if null (Grasshopper will handle it)
+                            System.Diagnostics.Debug.WriteLine($"  Final baselineGeo for wall {id}: {(baselineGeo != null ? baselineGeo.GetType().Name : "null")}");
                             baselines.Add(baselineGeo);
 
                             // Extract mesh
@@ -454,10 +497,6 @@ namespace GrasshopperRNG.Components
                             var thickness = wall["thickness"]?.Value<double>() ?? 0.0;
                             thicknesses.Add(thickness);
 
-                            // Extract parameters (as JSON string)
-                            var paramsObj = wall["parameters"] as JObject;
-                            var paramsJson = paramsObj != null ? paramsObj.ToString() : "{}";
-                            parameters.Add(paramsJson);
                         }
                     }
                 }
@@ -475,7 +514,6 @@ namespace GrasshopperRNG.Components
             DA.SetDataList(4, baselines);
             DA.SetDataList(5, meshes);
             DA.SetDataList(6, thicknesses);
-            DA.SetDataList(7, parameters);
         }
 
 

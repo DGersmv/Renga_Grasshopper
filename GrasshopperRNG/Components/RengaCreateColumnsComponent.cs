@@ -142,10 +142,10 @@ namespace GrasshopperRNG.Components
                 }
             }
 
-            if (client == null || !client.IsConnected)
+            if (client == null)
             {
                 DA.SetDataList(0, new List<bool>());
-                DA.SetDataList(1, new List<string> { "Renga Connect is not connected. Connect to Renga first." });
+                DA.SetDataList(1, new List<string> { "Renga Connect component not provided. Connect to Renga first." });
                 DA.SetDataList(2, new List<string>());
                 DA.SetDataList(3, new List<Mesh>());
                 return;
@@ -162,7 +162,7 @@ namespace GrasshopperRNG.Components
                 return;
             }
 
-            // Send command to server
+            // Send command to server (Send() will create a new connection if needed)
             var json = JsonConvert.SerializeObject(command);
             var responseJson = client.Send(json);
             
