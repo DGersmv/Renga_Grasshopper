@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using Grasshopper.Kernel.Types;
 using Rhino.Geometry;
-using GrasshopperRNG.Client;
-using Newtonsoft.Json;
+using GrasshopperRNG.Connection;
+using GrasshopperRNG.Commands;
 using Newtonsoft.Json.Linq;
 
 namespace GrasshopperRNG.Components
@@ -18,11 +17,7 @@ namespace GrasshopperRNG.Components
     /// </summary>
     public class RengaCreateColumnsComponent : GH_Component
     {
-        private bool updateButtonPressed = false;
-        private static Dictionary<string, string> pointGuidToColumnGuidMap = new Dictionary<string, string>();
-        private static Dictionary<string, Point3d> pointGuidToLastCoordinates = new Dictionary<string, Point3d>();
-        private static Dictionary<Point3d, string> pointToGuidMap = new Dictionary<Point3d, string>(new Point3dEqualityComparer());
-        private static int guidCounter = 0;
+        private bool lastUpdateValue = false;
 
         public RengaCreateColumnsComponent()
             : base("Renga Create Columns", "RengaCreateColumns",
@@ -31,22 +26,19 @@ namespace GrasshopperRNG.Components
         {
         }
 
+        public override Guid ComponentGuid => new Guid("7c3bb3ab-6ac6-479c-a563-bb90b14ebdaf");
+
         public override void CreateAttributes()
         {
             m_attributes = new RengaCreateColumnsComponentAttributes(this);
-        }
-
-        public void OnUpdateButtonClick()
-        {
-            updateButtonPressed = true;
-            ExpireSolution(true);
         }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
             pManager.AddPointParameter("Points", "P", "Points for column placement", GH_ParamAccess.list);
             pManager.AddGenericParameter("RengaConnect", "RC", "Renga Connect component (main node)", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Height", "H", "Column height in millimeters (default: 3000)", GH_ParamAccess.item, 3000.0);
+            pManager.AddNumberParameter("Height", "H", "Column height in millimeters (one per point, or single value for all, default: 3000)", GH_ParamAccess.list, 3000.0);
+            pManager.AddBooleanParameter("Update", "U", "Trigger update on False->True change", GH_ParamAccess.item, false);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
@@ -60,11 +52,15 @@ namespace GrasshopperRNG.Components
         {
             List<Point3d> points = new List<Point3d>();
             object rengaConnectObj = null;
-            double height = 3000.0;
+            List<double> heights = new List<double>();
+            bool updateValue = false;
 
-            // Check if Update button was pressed
-            bool wasUpdatePressed = updateButtonPressed;
-            updateButtonPressed = false;
+            // Get Update input
+            DA.GetData(3, ref updateValue);
+
+            // Check for False->True transition (trigger)
+            bool shouldUpdate = updateValue && !lastUpdateValue;
+            lastUpdateValue = updateValue;
 
             // Validate inputs
             if (!DA.GetDataList(0, points) || points.Count == 0)
@@ -83,17 +79,29 @@ namespace GrasshopperRNG.Components
                 return;
             }
 
-            // Get height parameter
-            if (!DA.GetData(2, ref height))
+            // Get height parameter (list)
+            if (!DA.GetDataList(2, heights) || heights.Count == 0)
             {
-                height = 3000.0; // default
+                heights = new List<double> { 3000.0 }; // default
             }
 
-            // Validate height
-            if (height <= 0)
+            // Normalize heights list: if shorter than points, use last value for remaining
+            while (heights.Count < points.Count)
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Height must be positive. Using default 3000mm");
-                height = 3000.0;
+                if (heights.Count > 0)
+                    heights.Add(heights[heights.Count - 1]);
+                else
+                    heights.Add(3000.0);
+            }
+
+            // Validate heights
+            for (int i = 0; i < heights.Count; i++)
+            {
+                if (heights[i] <= 0)
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, $"Height at index {i} must be positive. Using default 3000mm");
+                    heights[i] = 3000.0;
+                }
             }
 
             // Validate points
@@ -107,17 +115,17 @@ namespace GrasshopperRNG.Components
                 return;
             }
 
-            // Only process if Update button was pressed or points changed
-            if (!wasUpdatePressed)
+            // Only process if Update trigger occurred (False->True)
+            if (!shouldUpdate)
             {
                 DA.SetDataList(0, new List<bool>());
-                DA.SetDataList(1, new List<string> { "Click Update button to send points to Renga" });
+                DA.SetDataList(1, new List<string> { "Set Update to True to send points to Renga" });
                 DA.SetDataList(2, new List<string>());
                 return;
             }
 
-            // Extract RengaGhClient from rengaConnectObj
-            RengaGhClient client = null;
+            // Extract RengaConnectionClient from rengaConnectObj
+            RengaConnectionClient client = null;
             
             // Try as RengaGhClientGoo
             if (rengaConnectObj is RengaGhClientGoo goo)
@@ -125,7 +133,7 @@ namespace GrasshopperRNG.Components
                 client = goo.Value;
             }
             // Try direct cast
-            else if (rengaConnectObj is RengaGhClient directClient)
+            else if (rengaConnectObj is RengaConnectionClient directClient)
             {
                 client = directClient;
             }
@@ -135,7 +143,7 @@ namespace GrasshopperRNG.Components
                 try
                 {
                     var scriptVar = ghGoo.ScriptVariable();
-                    if (scriptVar is RengaGhClient scriptClient)
+                    if (scriptVar is RengaConnectionClient scriptClient)
                     {
                         client = scriptClient;
                     }
@@ -150,7 +158,7 @@ namespace GrasshopperRNG.Components
                 }
             }
 
-            if (client == null || !client.IsConnected)
+            if (client == null || !client.IsServerReachable())
             {
                 DA.SetDataList(0, new List<bool>());
                 DA.SetDataList(1, new List<string> { "Renga Connect is not connected. Connect to Renga first." });
@@ -159,47 +167,17 @@ namespace GrasshopperRNG.Components
             }
 
             // Prepare command with points, heights and GUIDs
-            var command = PrepareCommand(points, height);
-            if (command == null)
-            {
-                DA.SetDataList(0, new List<bool>());
-                DA.SetDataList(1, new List<string> { "Failed to prepare command" });
-                DA.SetDataList(2, new List<string>());
-                return;
-            }
+            var commandMessage = CreateColumnsCommand.CreateMessage(points, heights);
 
             // Send command to server
-            string responseJson = null;
+            ConnectionResponse response = null;
             try
             {
-                var json = JsonConvert.SerializeObject(command);
-                responseJson = client.Send(json);
-            }
-            catch (System.Net.Sockets.SocketException ex)
-            {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Network error: {ex.Message}");
-                for (int i = 0; i < points.Count; i++)
-                {
-                    DA.SetDataList(0, new List<bool> { false });
-                    DA.SetDataList(1, new List<string> { $"Network error: {ex.Message}" });
-                    DA.SetDataList(2, new List<string> { "" });
-                }
-                return;
-            }
-            catch (JsonException ex)
-            {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"JSON serialization error: {ex.Message}");
-                for (int i = 0; i < points.Count; i++)
-                {
-                    DA.SetDataList(0, new List<bool> { false });
-                    DA.SetDataList(1, new List<string> { $"JSON error: {ex.Message}" });
-                    DA.SetDataList(2, new List<string> { "" });
-                }
-                return;
+                response = client.Send(commandMessage);
             }
             catch (Exception ex)
             {
-                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Unexpected error: {ex.Message}");
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Error: {ex.Message}");
                 for (int i = 0; i < points.Count; i++)
                 {
                     DA.SetDataList(0, new List<bool> { false });
@@ -213,13 +191,14 @@ namespace GrasshopperRNG.Components
             var messages = new List<string>();
             var columnGuids = new List<string>();
 
-            if (string.IsNullOrEmpty(responseJson))
+            if (response == null || !response.Success)
             {
-                // No response - assume failure
+                // No response or error
+                var errorMsg = response?.Error ?? "Failed to send data to Renga or no response";
                 for (int i = 0; i < points.Count; i++)
                 {
                     successes.Add(false);
-                    messages.Add("Failed to send data to Renga or no response");
+                    messages.Add(errorMsg);
                     columnGuids.Add("");
                 }
             }
@@ -228,8 +207,7 @@ namespace GrasshopperRNG.Components
                 // Parse response
                 try
                 {
-                    var response = JsonConvert.DeserializeObject<JObject>(responseJson);
-                    var results = response?["results"] as JArray;
+                    var results = response.Data?["results"] as JArray;
 
                     if (results != null && results.Count == points.Count)
                     {
@@ -237,18 +215,21 @@ namespace GrasshopperRNG.Components
                         {
                             var result = results[i] as JObject;
                             var success = result?["success"]?.Value<bool>() ?? false;
-                            var message = result?["message"]?.ToString() ?? "Unknown";
+                            var resultMessage = result?["message"]?.ToString() ?? "Unknown";
                             var columnId = result?["columnId"]?.ToString() ?? "";
 
                             successes.Add(success);
-                            messages.Add(message);
+                            messages.Add(resultMessage);
                             columnGuids.Add(columnId);
 
                             // Update mapping
                             if (success && !string.IsNullOrEmpty(columnId))
                             {
-                                var pointGuid = GetPointGuid(points[i]);
-                                pointGuidToColumnGuidMap[pointGuid] = columnId;
+                                var pointGuid = result?["grasshopperGuid"]?.ToString();
+                                if (!string.IsNullOrEmpty(pointGuid))
+                                {
+                                    CreateColumnsCommand.UpdateMapping(pointGuid, columnId);
+                                }
                             }
                         }
                     }
@@ -289,65 +270,6 @@ namespace GrasshopperRNG.Components
             }
         }
 
-        private object PrepareCommand(List<Point3d> points, double height)
-        {
-            var pointData = new List<object>();
-
-            foreach (var point in points)
-            {
-                var pointGuid = GetPointGuid(point);
-                var rengaColumnGuid = pointGuidToColumnGuidMap.ContainsKey(pointGuid) 
-                    ? pointGuidToColumnGuidMap[pointGuid] 
-                    : null;
-
-                pointData.Add(new
-                {
-                    x = point.X,
-                    y = point.Y,
-                    z = point.Z,
-                    height = height,
-                    grasshopperGuid = pointGuid,
-                    rengaColumnGuid = rengaColumnGuid
-                });
-            }
-
-            return new
-            {
-                command = "update_points",
-                points = pointData,
-                timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-            };
-        }
-
-        private string GetPointGuid(Point3d point)
-        {
-            // Try to get GUID from point if it's a GH_Point with Rhino geometry
-            if (point is GH_Point ghPoint && ghPoint.Value != null)
-            {
-                var rhinoPoint = ghPoint.Value;
-                // Try to get GUID from Rhino geometry if available
-                // Note: Rhino Point3d doesn't have GUID, but we can check if it's from geometry
-            }
-
-            // Use stable GUID based on point coordinates with fallback to counter
-            // Check if we already have a GUID for this point (within tolerance)
-            const double tolerance = 0.001;
-            foreach (var kvp in pointToGuidMap)
-            {
-                var existingPoint = kvp.Key;
-                if (Math.Abs(existingPoint.X - point.X) < tolerance &&
-                    Math.Abs(existingPoint.Y - point.Y) < tolerance &&
-                    Math.Abs(existingPoint.Z - point.Z) < tolerance)
-                {
-                    return kvp.Value;
-                }
-            }
-
-            // Generate new GUID for this point
-            var newGuid = $"GH_Point_{++guidCounter}_{Guid.NewGuid():N}";
-            pointToGuidMap[point] = newGuid;
-            return newGuid;
-        }
 
         private bool ValidateInputs(List<Point3d> points, out string errorMessage)
         {
@@ -386,44 +308,5 @@ namespace GrasshopperRNG.Components
             return true;
         }
 
-        private bool HasCoordinatesChanged(string pointGuid, Point3d currentPoint)
-        {
-            if (!pointGuidToLastCoordinates.ContainsKey(pointGuid))
-            {
-                // New point
-                pointGuidToLastCoordinates[pointGuid] = currentPoint;
-                return true;
-            }
-
-            var lastPoint = pointGuidToLastCoordinates[pointGuid];
-            const double tolerance = 0.001; // Tolerance in Grasshopper units
-
-            if (Math.Abs(currentPoint.X - lastPoint.X) > tolerance ||
-                Math.Abs(currentPoint.Y - lastPoint.Y) > tolerance ||
-                Math.Abs(currentPoint.Z - lastPoint.Z) > tolerance)
-            {
-                // Coordinates changed
-                pointGuidToLastCoordinates[pointGuid] = currentPoint;
-                return true;
-            }
-
-            return false; // Coordinates haven't changed
-        }
-
-        // Helper class for Point3d equality comparison
-        private class Point3dEqualityComparer : IEqualityComparer<Point3d>
-        {
-            private const double tolerance = 0.001;
-
-            public bool Equals(Point3d x, Point3d y)
-            {
-                return Math.Abs(x.X - y.X) < tolerance &&
-                       Math.Abs(x.Y - y.Y) < tolerance &&
-                       Math.Abs(x.Z - y.Z) < tolerance;
-            }
-
-            public int GetHashCode(Point3d obj)
-            {
-                return obj.X.GetHashCode() ^ obj.Y.GetHashCode() ^ obj.Z.GetHashCode();
-            }
-        }
+    }
+}

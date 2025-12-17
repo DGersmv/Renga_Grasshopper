@@ -54,8 +54,8 @@ namespace RengaPlugin
                 var result = GeometryHelper.CalculateComplexGeometry(
                     points, 
                     points.Length, 
-                    tolerance: 0.1, 
-                    parameter2: 0.0
+                    0.1,  // parameter1
+                    0.0   // parameter2
                 );
 
                 if (result.Success == 1)
@@ -201,5 +201,6 @@ namespace RengaPlugin
         }
     }
 }
+
 
 

@@ -60,6 +60,11 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Client\RengaGhClient.cs" />
+    <Compile Include="Connection\ConnectionProtocol.cs" />
+    <Compile Include="Connection\ConnectionMessage.cs" />
+    <Compile Include="Connection\RengaConnectionClient.cs" />
+    <Compile Include="Commands\GetWallsCommand.cs" />
+    <Compile Include="Commands\CreateColumnsCommand.cs" />
     <Compile Include="Components\RengaConnectComponent.cs" />
     <Compile Include="Components\RengaConnectComponentAttributes.cs" />
     <Compile Include="Components\RengaCreateColumnsComponent.cs" />

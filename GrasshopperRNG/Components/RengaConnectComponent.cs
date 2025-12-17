@@ -3,7 +3,7 @@ using System.Drawing;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using Grasshopper.Kernel.Parameters;
-using GrasshopperRNG.Client;
+using GrasshopperRNG.Connection;
 
 namespace GrasshopperRNG.Components
 {
@@ -13,8 +13,7 @@ namespace GrasshopperRNG.Components
     /// </summary>
     public class RengaConnectComponent : GH_Component
     {
-        private RengaGhClient client;
-        private bool updateButtonPressed = false;
+        private RengaConnectionClient client;
 
         public RengaConnectComponent()
             : base("Renga Connect", "RengaConnect",
@@ -26,12 +25,6 @@ namespace GrasshopperRNG.Components
         public override void CreateAttributes()
         {
             m_attributes = new RengaConnectComponentAttributes(this);
-        }
-
-        public void OnUpdateButtonClick()
-        {
-            updateButtonPressed = true;
-            ExpireSolution(true);
         }
 
         protected override void RegisterInputParams(GH_InputParamManager pManager)
@@ -55,55 +48,40 @@ namespace GrasshopperRNG.Components
             DA.GetData(0, ref port);
             DA.GetData(1, ref connect);
 
-            // Reset update button flag after processing
-            bool wasUpdatePressed = updateButtonPressed;
-            updateButtonPressed = false;
 
             if (client == null)
             {
-                client = new RengaGhClient { Port = port };
+                client = new RengaConnectionClient { Port = port };
             }
             else if (client.Port != port)
             {
-                client.Disconnect();
                 client.Port = port;
             }
 
-            // Handle connection/disconnection
-            if (connect && !client.IsConnected)
+            // Check server reachability (new client doesn't maintain persistent connection)
+            bool isReachable = client.IsServerReachable();
+
+            // Handle connection status
+            if (connect)
             {
-                if (client.Connect())
+                if (isReachable)
                 {
                     DA.SetData(0, true);
-                    DA.SetData(1, $"Connected to Renga on port {port}");
+                    DA.SetData(1, $"Server reachable on port {port}");
                     DA.SetData(2, new RengaGhClientGoo(client));
                 }
                 else
                 {
                     DA.SetData(0, false);
-                    DA.SetData(1, $"Failed to connect to Renga on port {port}. Make sure Renga plugin is running.");
+                    DA.SetData(1, $"Server not reachable on port {port}. Make sure Renga plugin is running and server is started.");
                     DA.SetData(2, null);
                 }
             }
-            else if (!connect && client.IsConnected)
-            {
-                client.Disconnect();
-                DA.SetData(0, false);
-                DA.SetData(1, "Disconnected from Renga");
-                DA.SetData(2, null);
-            }
-            else if (wasUpdatePressed && client.IsConnected)
-            {
-                // Update button pressed - refresh connection status
-                DA.SetData(0, true);
-                DA.SetData(1, $"Connected to Renga on port {port} (refreshed)");
-                DA.SetData(2, new RengaGhClientGoo(client));
-            }
             else
             {
-                DA.SetData(0, client.IsConnected);
-                DA.SetData(1, client.IsConnected ? "Connected" : "Not connected");
-                DA.SetData(2, client.IsConnected ? new RengaGhClientGoo(client) : null);
+                DA.SetData(0, false);
+                DA.SetData(1, "Not connected");
+                DA.SetData(2, null);
             }
         }
 

@@ -8,8 +8,8 @@ using Grasshopper.Kernel.Types;
 using Grasshopper.Kernel.Data;
 using Grasshopper.Kernel.Parameters;
 using Rhino.Geometry;
-using GrasshopperRNG.Client;
-using Newtonsoft.Json;
+using GrasshopperRNG.Connection;
+using GrasshopperRNG.Commands;
 using Newtonsoft.Json.Linq;
 
 namespace GrasshopperRNG.Components
@@ -104,8 +104,8 @@ namespace GrasshopperRNG.Components
                 return;
             }
 
-            // Extract RengaGhClient from rengaConnectObj
-            RengaGhClient client = null;
+            // Extract RengaConnectionClient from rengaConnectObj
+            RengaConnectionClient client = null;
             
             // Try as RengaGhClientGoo
             if (rengaConnectObj is RengaGhClientGoo goo)
@@ -113,7 +113,7 @@ namespace GrasshopperRNG.Components
                 client = goo.Value;
             }
             // Try direct cast
-            else if (rengaConnectObj is RengaGhClient directClient)
+            else if (rengaConnectObj is RengaConnectionClient directClient)
             {
                 client = directClient;
             }
@@ -123,7 +123,7 @@ namespace GrasshopperRNG.Components
                 try
                 {
                     var scriptVar = ghGoo.ScriptVariable();
-                    if (scriptVar is RengaGhClient scriptClient)
+                    if (scriptVar is RengaConnectionClient scriptClient)
                     {
                         client = scriptClient;
                     }
@@ -138,7 +138,7 @@ namespace GrasshopperRNG.Components
                 }
             }
 
-            if (client == null || !client.IsConnected)
+            if (client == null || !client.IsServerReachable())
             {
                 DA.SetData(0, false);
                 DA.SetData(1, "Renga Connect is not connected. Connect to Renga first.");
@@ -151,15 +151,25 @@ namespace GrasshopperRNG.Components
             }
 
             // Prepare command to get walls
-            var command = new
-            {
-                command = "get_walls",
-                timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
-            };
+            var message = GetWallsCommand.CreateMessage();
 
             // Send command to server
-            var json = JsonConvert.SerializeObject(command);
-            var responseJson = client.Send(json);
+            ConnectionResponse response = null;
+            try
+            {
+                response = client.Send(message);
+            }
+            catch (Exception ex)
+            {
+                DA.SetData(0, false);
+                DA.SetData(1, $"Error: {ex.Message}");
+                DA.SetDataList(2, new List<int>());
+                DA.SetDataList(3, new List<string>());
+                DA.SetDataList(4, new List<IGH_GeometricGoo>());
+                DA.SetDataList(5, new List<IGH_GeometricGoo>());
+                DA.SetDataList(6, new List<double>());
+                return;
+            }
             
             var wallIds = new List<int>();
             var wallNames = new List<string>();
@@ -167,22 +177,21 @@ namespace GrasshopperRNG.Components
             var meshes = new List<IGH_GeometricGoo>();
             var thicknesses = new List<double>();
             bool success = false;
-            string message = "";
+            string messageStr = "";
 
-            if (string.IsNullOrEmpty(responseJson))
+            if (response == null || !response.Success)
             {
                 success = false;
-                message = "Failed to get response from Renga";
+                messageStr = response?.Error ?? "Failed to get response from Renga";
             }
             else
             {
                 // Parse response
                 try
                 {
-                    var response = JsonConvert.DeserializeObject<JObject>(responseJson);
-                    success = response?["success"]?.Value<bool>() ?? false;
-                    message = response?["message"]?.ToString() ?? "Unknown";
-                    var walls = response?["walls"] as JArray;
+                    success = response.Success;
+                    messageStr = response.Error ?? "Success";
+                    var walls = response.Data?["walls"] as JArray;
 
                     if (success && walls != null)
                     {
@@ -482,12 +491,12 @@ namespace GrasshopperRNG.Components
                 catch (Exception ex)
                 {
                     success = false;
-                    message = $"Error parsing response: {ex.Message}";
+                    messageStr = $"Error parsing response: {ex.Message}";
                 }
             }
 
             DA.SetData(0, success);
-            DA.SetData(1, message);
+            DA.SetData(1, messageStr);
             DA.SetDataList(2, wallIds);
             DA.SetDataList(3, wallNames);
             DA.SetDataList(4, baselines);

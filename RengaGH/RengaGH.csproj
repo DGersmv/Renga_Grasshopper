@@ -43,26 +43,10 @@
       <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     </ItemGroup>
 
-    <!-- Reference to C++ DLL project (optional - for build order) -->
-    <ItemGroup>
-      <ProjectReference Include="..\RengaGeometry\RengaGeometry.vcxproj">
-        <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </ProjectReference>
-    </ItemGroup>
-
-    <!-- Copy C++ DLL to output directory -->
-    <ItemGroup>
-      <Content Include="..\RengaGeometry\$(Configuration)\RengaGeometry.dll" Condition="Exists('..\RengaGeometry\$(Configuration)\RengaGeometry.dll')">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-    </ItemGroup>
-  
   <!-- Post-build event to copy to Renga plugins folder -->
   <Target Name="PostBuild" AfterTargets="Build">
     <PropertyGroup>
       <RengaPluginsPath>C:\Program Files\Renga Standard\Plugins\$(TargetName)</RengaPluginsPath>
-      <CppDllPath>..\RengaGeometry\$(Configuration)\RengaGeometry.dll</CppDllPath>
     </PropertyGroup>
     <MakeDir Directories="$(RengaPluginsPath)" Condition="!Exists('$(RengaPluginsPath)')" />
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(RengaPluginsPath)" />
@@ -71,8 +55,6 @@
     <Copy SourceFiles="$(TargetDir)Interop.Renga.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Interop.Renga.dll')" />
     <Copy SourceFiles="$(TargetDir)Renga.NET8.PluginUtility.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Renga.NET8.PluginUtility.dll')" />
     <Copy SourceFiles="$(TargetDir)Newtonsoft.Json.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Newtonsoft.Json.dll')" />
-    <!-- Copy C++ DLL if it exists -->
-    <Copy SourceFiles="$(CppDllPath)" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(CppDllPath)')" />
     <Message Text="RengaGH.dll and dependencies copied to $(RengaPluginsPath)" Importance="high" />
   </Target>
 </Project>

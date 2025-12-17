@@ -1,27 +1,27 @@
 using System;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
-using GrasshopperRNG.Client;
+using GrasshopperRNG.Connection;
 
 namespace GrasshopperRNG.Components
 {
     /// <summary>
-    /// GH_Goo wrapper for RengaGhClient to pass between components
+    /// GH_Goo wrapper for RengaConnectionClient to pass between components
     /// </summary>
-    public class RengaGhClientGoo : GH_Goo<RengaGhClient>
+    public class RengaGhClientGoo : GH_Goo<RengaConnectionClient>
     {
         public RengaGhClientGoo()
         {
         }
 
-        public RengaGhClientGoo(RengaGhClient client)
+        public RengaGhClientGoo(RengaConnectionClient client)
         {
             Value = client;
         }
 
         public override bool IsValid => Value != null;
 
-        public override string TypeName => "RengaGhClient";
+        public override string TypeName => "RengaConnectionClient";
 
         public override string TypeDescription => "Renga TCP Client for Grasshopper";
 
@@ -33,16 +33,16 @@ namespace GrasshopperRNG.Components
         public override string ToString()
         {
             if (Value == null)
-                return "Null RengaGhClient";
+                return "Null RengaConnectionClient";
             
-            return Value.IsConnected 
-                ? $"RengaGhClient (Connected on port {Value.Port})" 
-                : $"RengaGhClient (Not connected)";
+            return Value.IsServerReachable() 
+                ? $"RengaConnectionClient (Server reachable on port {Value.Port})" 
+                : $"RengaConnectionClient (Server not reachable)";
         }
 
         public override bool CastFrom(object source)
         {
-            if (source is RengaGhClient client)
+            if (source is RengaConnectionClient client)
             {
                 Value = client;
                 return true;
@@ -52,7 +52,7 @@ namespace GrasshopperRNG.Components
 
         public bool CastTo<T>(out T target)
         {
-            if (typeof(T).IsAssignableFrom(typeof(RengaGhClient)))
+            if (typeof(T).IsAssignableFrom(typeof(RengaConnectionClient)))
             {
                 target = (T)(object)Value;
                 return true;

@@ -10,30 +10,32 @@
 using System;
 using Renga;
 using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
-using System.Text;
 using System.Windows.Forms;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using RengaPlugin.Connection;
+using RengaPlugin.Commands;
 
 namespace RengaPlugin
 {
-    public class RengaPlugin : Renga.IPlugin
+    public partial class RengaPlugin : Renga.IPlugin
     {
         private Renga.IApplication m_app;
         private TcpListener tcpListener;
         private bool isServerRunning = false;
         private int serverPort = 50100; // Default port
-        private Dictionary<string, int> guidToColumnIdMap = new Dictionary<string, int>(); // Grasshopper Point GUID -> Renga Column ID
+        private CommandRouter commandRouter;
 
         private List<Renga.ActionEventSource> m_eventSources = new List<Renga.ActionEventSource>();
 
         public bool Initialize(string pluginFolder)
         {
             m_app = new Renga.Application();
+            
+            // Initialize command router
+            commandRouter = new CommandRouter(m_app);
+            
             var ui = m_app.UI;
             var panelExtension = ui.CreateUIPanelExtension();
 
@@ -155,396 +157,53 @@ namespace RengaPlugin
             try
             {
                 var stream = client.GetStream();
-                var buffer = new byte[8192]; // Increased buffer size
-                var totalBytesRead = 0;
+                stream.ReadTimeout = 10000; // 10 seconds timeout
                 
-                // Read data in chunks until we have complete JSON
-                while (client.Connected && stream.DataAvailable)
-                {
-                    var bytesRead = await stream.ReadAsync(buffer, totalBytesRead, buffer.Length - totalBytesRead);
-                    if (bytesRead == 0) break;
-                    totalBytesRead += bytesRead;
-                }
-
-                if (totalBytesRead > 0)
-                {
-                    var json = Encoding.UTF8.GetString(buffer, 0, totalBytesRead);
-                    var command = ParseAndProcessCommand(json);
-                    
-                    // Send response back to client
-                    var response = CreateResponse(command);
-                    var responseJson = JsonConvert.SerializeObject(response);
-                    var responseData = Encoding.UTF8.GetBytes(responseJson);
-                    await stream.WriteAsync(responseData, 0, responseData.Length);
-                    await stream.FlushAsync();
-                }
+                // Receive message using new protocol
+                var json = await Connection.ConnectionProtocol.ReceiveMessageAsync(stream, 10000);
+                System.Diagnostics.Debug.WriteLine($"Received JSON ({json.Length} bytes): {json.Substring(0, Math.Min(200, json.Length))}...");
+                
+                // Parse message
+                var message = ConnectionMessage.FromJson(json);
+                
+                // Route to appropriate handler
+                var response = commandRouter.Route(message);
+                
+                // Send response back to client
+                var responseJson = response.ToJson();
+                System.Diagnostics.Debug.WriteLine($"Sending response ({responseJson.Length} bytes)");
+                
+                await Connection.ConnectionProtocol.SendMessageAsync(stream, responseJson);
+                System.Diagnostics.Debug.WriteLine($"Response sent successfully");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error handling client: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error handling client: {ex.Message}\n{ex.StackTrace}");
+                
+                // Try to send error response if possible
+                try
+                {
+                    var errorResponse = new ConnectionResponse
+                    {
+                        Id = "",
+                        Success = false,
+                        Error = $"Server error: {ex.Message}"
+                    };
+                    var stream = client.GetStream();
+                    await Connection.ConnectionProtocol.SendMessageAsync(stream, errorResponse.ToJson());
+                }
+                catch { }
             }
             finally
             {
-                client.Close();
-            }
-        }
-
-        private CommandResult ParseAndProcessCommand(string json)
-        {
-            try
-            {
-                var jsonObj = JObject.Parse(json);
-                var command = jsonObj["command"]?.ToString();
-                var points = jsonObj["points"] as JArray;
-
-                if (points == null || points.Count == 0)
-                {
-                    return new CommandResult { Success = false, Message = "No points provided" };
-                }
-
-                var results = new List<PointResult>();
-
-                foreach (var pointObj in points)
-                {
-                    var pointResult = ProcessPoint(pointObj as JObject);
-                    results.Add(pointResult);
-                }
-
-                return new CommandResult
-                {
-                    Success = true,
-                    Message = $"Processed {results.Count} points",
-                    Results = results
-                };
-            }
-            catch (Exception ex)
-            {
-                return new CommandResult
-                {
-                    Success = false,
-                    Message = $"Error parsing command: {ex.Message}"
-                };
-            }
-        }
-
-        private PointResult ProcessPoint(JObject? pointObj)
-        {
-            if (pointObj == null)
-            {
-                return new PointResult { Success = false, Message = "Invalid point data" };
-            }
-
-            try
-            {
-                var x = pointObj["x"]?.Value<double>() ?? 0;
-                var y = pointObj["y"]?.Value<double>() ?? 0;
-                var z = pointObj["z"]?.Value<double>() ?? 0;
-                var height = pointObj["height"]?.Value<double>() ?? 3000.0; // Default 3000mm
-                var grasshopperGuid = pointObj["grasshopperGuid"]?.ToString();
-                var rengaColumnGuid = pointObj["rengaColumnGuid"]?.ToString();
-
-                if (string.IsNullOrEmpty(grasshopperGuid))
-                {
-                    return new PointResult { Success = false, Message = "Missing grasshopperGuid" };
-                }
-
-                // Check if column already exists
-                int columnId = 0;
-                bool columnExists = false;
-
-                // First check by grasshopperGuid in our map
-                if (guidToColumnIdMap.ContainsKey(grasshopperGuid))
-                {
-                    columnId = guidToColumnIdMap[grasshopperGuid];
-                    columnExists = true;
-                }
-                // If not found, check by rengaColumnGuid (if provided)
-                else if (!string.IsNullOrEmpty(rengaColumnGuid))
-                {
-                    if (int.TryParse(rengaColumnGuid, out int parsedId))
-                    {
-                        // Check if this column ID exists in our map
-                        if (guidToColumnIdMap.ContainsValue(parsedId))
-                        {
-                            columnId = parsedId;
-                            columnExists = true;
-                            // Update mapping with grasshopperGuid
-                            var existingKey = guidToColumnIdMap.FirstOrDefault(kvp => kvp.Value == parsedId).Key;
-                            if (!string.IsNullOrEmpty(existingKey))
-                            {
-                                guidToColumnIdMap.Remove(existingKey);
-                            }
-                            guidToColumnIdMap[grasshopperGuid] = parsedId;
-                        }
-                    }
-                }
-                else
-                {
-                    columnId = 0;
-                }
-
-                if (columnExists)
-                {
-                    // Update column position and height
-                    return UpdateColumn(columnId, x, y, z, height, grasshopperGuid);
-                }
-                else
-                {
-                    // Create new column
-                    return CreateColumn(x, y, z, height, grasshopperGuid);
-                }
-            }
-            catch (Exception ex)
-            {
-                return new PointResult { Success = false, Message = $"Error processing point: {ex.Message}" };
-            }
-        }
-
-        private PointResult CreateColumn(double x, double y, double z, double height, string grasshopperGuid)
-        {
-            try
-            {
-                var model = m_app.Project.Model;
-                if (model == null)
-                {
-                    return new PointResult { Success = false, Message = "No active model" };
-                }
-
-                // Get active level or first level
-                Renga.ILevel? level = GetActiveLevel();
-                if (level == null)
-                {
-                    return new PointResult { Success = false, Message = "No active level found" };
-                }
-
-                var args = model.CreateNewEntityArgs();
-                args.TypeId = Renga.ObjectTypes.Column;
-
-                var op = m_app.Project.CreateOperationWithUndo(model.Id);
-                op.Start();
-                var column = model.CreateObject(args) as Renga.ILevelObject;
-                
-                if (column == null)
-                {
-                    op.Rollback();
-                    return new PointResult { Success = false, Message = m_app.LastError };
-                }
-
-                // Set placement - get existing placement and modify origin
-                var placement = column.GetPlacement();
-                if (placement != null)
-                {
-                    // Create a copy and move it to the new position
-                    var newPlacement = placement.GetCopy();
-                    var moveVector = new Renga.Vector3D 
-                    { 
-                        X = x - placement.Origin.X, 
-                        Y = y - placement.Origin.Y, 
-                        Z = z - placement.Origin.Z 
-                    };
-                    newPlacement.Move(moveVector);
-                    column.SetPlacement(newPlacement);
-                }
-
-                // Set column height using IParameterContainer
                 try
                 {
-                    var modelObject = column as Renga.IModelObject;
-                    if (modelObject != null)
-                    {
-                        var parameters = modelObject.GetParameters();
-                        if (parameters != null)
-                        {
-                            // Try ColumnHeight parameter ID
-                            try
-                            {
-                                var heightParameter = parameters.Get(Renga.ParameterIds.ColumnHeight);
-                                if (heightParameter != null)
-                                {
-                                    heightParameter.SetDoubleValue(height);
-                                    System.Diagnostics.Debug.WriteLine($"Column height set to {height}mm for GUID: {grasshopperGuid}");
-                                }
-                            }
-                            catch
-                            {
-                                // ColumnHeight parameter might not exist, try alternative approach
-                                System.Diagnostics.Debug.WriteLine($"ParameterIds.ColumnHeight not found, trying alternative method");
-                            }
-                        }
-                    }
+                    client.Close();
                 }
-                catch (Exception ex)
-                {
-                    // Log error but don't fail column creation
-                    System.Diagnostics.Debug.WriteLine($"Error setting column height: {ex.Message}");
-                }
-
-                op.Apply();
-
-                // Store mapping - get ID from column object (cast to IModelObject)
-                int columnId = (column as Renga.IModelObject).Id;
-                
-                guidToColumnIdMap[grasshopperGuid] = columnId;
-
-                return new PointResult
-                {
-                    Success = true,
-                    Message = "Column created",
-                    ColumnId = columnId.ToString(),
-                    GrasshopperGuid = grasshopperGuid
-                };
-            }
-            catch (Exception ex)
-            {
-                return new PointResult { Success = false, Message = $"Error creating column: {ex.Message}" };
+                catch { }
             }
         }
 
-        private PointResult UpdateColumn(int columnId, double x, double y, double z, double height, string grasshopperGuid)
-        {
-            try
-            {
-                var model = m_app.Project.Model;
-                if (model == null)
-                {
-                    return new PointResult { Success = false, Message = "No active model" };
-                }
-
-                var column = model.GetObjects().GetById(columnId) as ILevelObject;
-                if (column == null)
-                {
-                    return new PointResult { Success = false, Message = "Column not found" };
-                }
-
-                var op = m_app.Project.CreateOperationWithUndo(model.Id);
-                op.Start();
-
-                // Update placement - get existing placement and move it to new position
-                var placement = column.GetPlacement();
-                if (placement != null)
-                {
-                    // Create a copy and move it to the new position
-                    var newPlacement = placement.GetCopy();
-                    var moveVector = new Renga.Vector3D 
-                    { 
-                        X = x - placement.Origin.X, 
-                        Y = y - placement.Origin.Y, 
-                        Z = z - placement.Origin.Z 
-                    };
-                    newPlacement.Move(moveVector);
-                    column.SetPlacement(newPlacement);
-                }
-
-                // Update column height using IParameterContainer
-                try
-                {
-                    var modelObject = column as Renga.IModelObject;
-                    if (modelObject != null)
-                    {
-                        var parameters = modelObject.GetParameters();
-                        if (parameters != null)
-                        {
-                            // Try ColumnHeight parameter ID
-                            try
-                            {
-                                var heightParameter = parameters.Get(Renga.ParameterIds.ColumnHeight);
-                                if (heightParameter != null)
-                                {
-                                    heightParameter.SetDoubleValue(height);
-                                    System.Diagnostics.Debug.WriteLine($"Column height updated to {height}mm for column ID: {columnId}");
-                                }
-                            }
-                            catch
-                            {
-                                // ColumnHeight parameter might not exist
-                                System.Diagnostics.Debug.WriteLine($"ParameterIds.ColumnHeight not found for column ID: {columnId}");
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log error but don't fail column update
-                    System.Diagnostics.Debug.WriteLine($"Error updating column height: {ex.Message}");
-                }
-                
-                op.Apply();
-
-                return new PointResult
-                {
-                    Success = true,
-                    Message = "Column updated",
-                    ColumnId = columnId.ToString(),
-                    GrasshopperGuid = grasshopperGuid
-                };
-            }
-            catch (Exception ex)
-            {
-                return new PointResult { Success = false, Message = $"Error updating column: {ex.Message}" };
-            }
-        }
-
-        private Renga.ILevel? GetActiveLevel()
-        {
-            try
-            {
-                var view = m_app.ActiveView;
-                if (view?.Type == Renga.ViewType.ViewType_View3D || view?.Type == Renga.ViewType.ViewType_Level)
-                {
-                    var model = m_app.Project.Model;
-                    if (model != null)
-                    {
-                        var objects = model.GetObjects();
-                        int count = objects.Count;
-                        for (int i = 0; i < count; i++)
-                        {
-                            var obj = objects.GetByIndex(i);
-                            if (obj.ObjectType == Renga.ObjectTypes.Level)
-                            {
-                                return obj as Renga.ILevel;
-                            }
-                        }
-                    }
-                }
-            }
-            catch
-            {
-                // Fall through
-            }
-            return null;
-        }
-
-        private object CreateResponse(CommandResult result)
-        {
-            return new
-            {
-                success = result.Success,
-                message = result.Message,
-                results = result.Results?.Select(r => new
-                {
-                    success = r.Success,
-                    message = r.Message,
-                    columnId = r.ColumnId,
-                    grasshopperGuid = r.GrasshopperGuid
-                })
-            };
-        }
-    }
-
-    // Helper classes
-    internal class CommandResult
-    {
-        public bool Success { get; set; }
-        public string Message { get; set; } = "";
-        public List<PointResult>? Results { get; set; }
-    }
-
-    internal class PointResult
-    {
-        public bool Success { get; set; }
-        public string Message { get; set; } = "";
-        public string? ColumnId { get; set; }
-        public string? GrasshopperGuid { get; set; }
     }
 }
 
