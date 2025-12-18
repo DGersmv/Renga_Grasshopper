@@ -1,12 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using Grasshopper.Kernel.Types;
-using Grasshopper.Kernel.Data;
-using Grasshopper.Kernel.Parameters;
 using Rhino.Geometry;
 using GrasshopperRNG.Connection;
 using GrasshopperRNG.Commands;
@@ -15,52 +12,38 @@ using Newtonsoft.Json.Linq;
 namespace GrasshopperRNG.Components
 {
     /// <summary>
-    /// Component for getting walls from Renga and displaying them in Grasshopper
+    /// Component for getting walls from Renga
     /// </summary>
     public class RengaGetWallsComponent : GH_Component
     {
         private bool lastUpdateValue = false;
 
         public RengaGetWallsComponent()
-            : base("Get Walls", "GetWalls",
-                "Input: Get walls from Renga and their parameters",
-                "Renga", "Input")
+            : base("Renga Get Walls", "RengaGetWalls",
+                "Get walls from Renga with baseline curves and mesh geometry",
+                "Renga", "Walls")
         {
         }
 
-
-        protected override void RegisterInputParams(GH_InputParamManager pManager)
-        {
-            pManager.AddGenericParameter("RengaConnect", "RC", "Renga Connect component (main node)", GH_ParamAccess.item);
-            pManager.AddBooleanParameter("Update", "Update", "Trigger update on False->True change", GH_ParamAccess.item);
-        }
+        public override Guid ComponentGuid => new Guid("8d4e5f6a-7b8c-9d0e-1f2a-3b4c5d6e7f8a");
 
         public override void CreateAttributes()
         {
             m_attributes = new RengaGetWallsComponentAttributes(this);
-            // Set Update parameter as optional for backward compatibility
-            if (Params.Input.Count > 1)
-            {
-                Params.Input[1].Optional = true;
-            }
         }
 
-        protected override void BeforeSolveInstance()
+        protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
-            // Reset update state before each solve
-            // This helps with backward compatibility
-            base.BeforeSolveInstance();
+            pManager.AddGenericParameter("RengaConnect", "RC", "Renga Connect component (main node)", GH_ParamAccess.item);
+            pManager.AddBooleanParameter("Update", "U", "Trigger update on False->True change", GH_ParamAccess.item, false);
         }
 
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
         {
             pManager.AddBooleanParameter("Success", "S", "Success status", GH_ParamAccess.item);
             pManager.AddTextParameter("Message", "M", "Status message", GH_ParamAccess.item);
-            pManager.AddIntegerParameter("WallIds", "ID", "Wall IDs", GH_ParamAccess.list);
-            pManager.AddTextParameter("WallNames", "N", "Wall names", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Baselines", "BL", "Wall baselines (curves)", GH_ParamAccess.list);
-            pManager.AddGeometryParameter("Meshes", "M", "Wall geometry as Mesh", GH_ParamAccess.list);
-            pManager.AddNumberParameter("Thickness", "T", "Wall thickness", GH_ParamAccess.list);
+            pManager.AddCurveParameter("Baselines", "B", "Wall baseline curves", GH_ParamAccess.list);
+            pManager.AddMeshParameter("Meshes", "M", "Wall mesh geometry", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -68,39 +51,19 @@ namespace GrasshopperRNG.Components
             object rengaConnectObj = null;
             bool updateValue = false;
 
-            if (!DA.GetData(0, ref rengaConnectObj))
-            {
-                DA.SetData(0, false);
-                DA.SetData(1, "Renga Connect component not connected");
-                DA.SetDataList(2, new List<int>());
-                DA.SetDataList(3, new List<string>());
-                DA.SetDataList(4, new List<IGH_GeometricGoo>());
-                DA.SetDataList(5, new List<IGH_GeometricGoo>());
-                DA.SetDataList(6, new List<double>());
-                return;
-            }
-
-            // Get Update input (optional for backward compatibility)
-            updateValue = false;
-            if (Params.Input.Count > 1)
-            {
-                DA.GetData(1, ref updateValue);
-            }
+            // Get Update input
+            DA.GetData(1, ref updateValue);
 
             // Check for False->True transition (trigger)
             bool shouldUpdate = updateValue && !lastUpdateValue;
             lastUpdateValue = updateValue;
 
-            // Only process if Update trigger occurred
-            if (!shouldUpdate)
+            if (!DA.GetData(0, ref rengaConnectObj))
             {
                 DA.SetData(0, false);
-                DA.SetData(1, "Set Update to True to get walls from Renga");
-                DA.SetDataList(2, new List<int>());
-                DA.SetDataList(3, new List<string>());
-                DA.SetDataList(4, new List<IGH_GeometricGoo>());
-                DA.SetDataList(5, new List<IGH_GeometricGoo>());
-                DA.SetDataList(6, new List<double>());
+                DA.SetData(1, "Renga Connect component not provided. Connect to Renga first.");
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
                 return;
             }
 
@@ -138,329 +101,296 @@ namespace GrasshopperRNG.Components
                 }
             }
 
-            if (client == null || !client.IsServerReachable())
+            if (client == null)
             {
                 DA.SetData(0, false);
-                DA.SetData(1, "Renga Connect is not connected. Connect to Renga first.");
-                DA.SetDataList(2, new List<int>());
-                DA.SetDataList(3, new List<string>());
-                DA.SetDataList(4, new List<IGH_GeometricGoo>());
-                DA.SetDataList(5, new List<IGH_GeometricGoo>());
-                DA.SetDataList(6, new List<double>());
+                DA.SetData(1, "Renga Connect component not provided. Connect to Renga first.");
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
                 return;
             }
 
-            // Prepare command to get walls
-            var message = GetWallsCommand.CreateMessage();
+            if (!client.IsServerReachable())
+            {
+                DA.SetData(0, false);
+                DA.SetData(1, "Renga Connect is not connected. Connect to Renga first.");
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
+                return;
+            }
+
+            // Only process if Update trigger occurred (False->True)
+            if (!shouldUpdate)
+            {
+                DA.SetData(0, false);
+                DA.SetData(1, "Set Update to True to get walls from Renga");
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
+                return;
+            }
+
+            // Prepare command
+            var commandMessage = GetWallsCommand.CreateMessage();
 
             // Send command to server
             ConnectionResponse response = null;
             try
             {
-                response = client.Send(message);
+                response = client.Send(commandMessage);
             }
             catch (Exception ex)
             {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Error: {ex.Message}");
                 DA.SetData(0, false);
                 DA.SetData(1, $"Error: {ex.Message}");
-                DA.SetDataList(2, new List<int>());
-                DA.SetDataList(3, new List<string>());
-                DA.SetDataList(4, new List<IGH_GeometricGoo>());
-                DA.SetDataList(5, new List<IGH_GeometricGoo>());
-                DA.SetDataList(6, new List<double>());
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
                 return;
             }
-            
-            var wallIds = new List<int>();
-            var wallNames = new List<string>();
-            var baselines = new List<IGH_GeometricGoo>();
-            var meshes = new List<IGH_GeometricGoo>();
-            var thicknesses = new List<double>();
-            bool success = false;
-            string messageStr = "";
 
             if (response == null || !response.Success)
             {
-                success = false;
-                messageStr = response?.Error ?? "Failed to get response from Renga";
+                var errorMsg = response?.Error ?? "Failed to get walls from Renga or no response";
+                DA.SetData(0, false);
+                DA.SetData(1, errorMsg);
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
+                return;
             }
-            else
-            {
-                // Parse response
-                try
-                {
-                    success = response.Success;
-                    messageStr = response.Error ?? "Success";
-                    var walls = response.Data?["walls"] as JArray;
 
-                    if (success && walls != null)
+            // Parse response
+            try
+            {
+                var walls = response.Data?["walls"] as JArray;
+                if (walls == null)
+                {
+                    DA.SetData(0, false);
+                    DA.SetData(1, "No walls found in response");
+                    DA.SetDataList(2, new List<Curve>());
+                    DA.SetDataList(3, new List<Mesh>());
+                    return;
+                }
+
+                var baselines = new List<Curve>();
+                var meshes = new List<Mesh>();
+
+                foreach (var wallToken in walls)
+                {
+                    var wall = wallToken as JObject;
+                    if (wall == null)
+                        continue;
+
+                    var id = wall["id"]?.Value<int>() ?? 0;
+                    
+                    // Process baseline
+                    var baselineObj = wall["baseline"] as JObject;
+                    Curve baselineGeo = null;
+                    if (baselineObj == null)
                     {
-                        foreach (var wallObj in walls)
+                        System.Diagnostics.Debug.WriteLine($"Warning: baseline is null for wall {id}");
+                        baselineGeo = null;
+                    }
+                    else
+                    {
+                        baselineGeo = ParseBaseline(baselineObj);
+                    }
+
+                    if (baselineGeo != null)
+                    {
+                        baselines.Add(baselineGeo);
+                    }
+
+                    // Process mesh
+                    var meshArray = wall["mesh"] as JArray;
+                    if (meshArray != null)
+                    {
+                        foreach (var meshToken in meshArray)
                         {
-                            var wall = wallObj as JObject;
-                            if (wall == null)
+                            var meshObj = meshToken as JObject;
+                            if (meshObj == null)
                                 continue;
 
-                            // Extract ID
-                            var id = wall["id"]?.Value<int>() ?? 0;
-                            wallIds.Add(id);
-
-                            // Extract name
-                            var name = wall["name"]?.ToString() ?? "";
-                            wallNames.Add(name);
-
-                            // Extract baseline
-                            IGH_GeometricGoo baselineGeo = null;
-                            try
+                            var grids = meshObj["grids"] as JArray;
+                            if (grids != null)
                             {
-                                var baselineObj = wall["baseline"] as JObject;
-                                if (baselineObj == null)
+                                foreach (var gridToken in grids)
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"Warning: baseline is null for wall {id}");
-                                    baselines.Add(null);
-                                    continue;
-                                }
-                                
-                                var startPoint = baselineObj["startPoint"] as JObject;
-                                var endPoint = baselineObj["endPoint"] as JObject;
-                                var baselineType = baselineObj["type"]?.ToString() ?? "LineSegment";
+                                    var grid = gridToken as JObject;
+                                    if (grid == null)
+                                        continue;
 
-                                double startX = 0, startY = 0, startZ = 0;
-                                double endX = 0, endY = 0, endZ = 0;
-                                
-                                if (startPoint != null && endPoint != null)
-                                {
-                                    startX = startPoint["x"]?.Value<double>() ?? 0;
-                                    startY = startPoint["y"]?.Value<double>() ?? 0;
-                                    startZ = startPoint["z"]?.Value<double>() ?? 0;
-                                    endX = endPoint["x"]?.Value<double>() ?? 0;
-                                    endY = endPoint["y"]?.Value<double>() ?? 0;
-                                    endZ = endPoint["z"]?.Value<double>() ?? 0;
-
-                                    // Check if we have segments (preferred - exact lines from Renga)
-                                    var segments = baselineObj["segments"] as JArray;
-                                    if (segments != null && segments.Count > 0)
+                                    var mesh = ParseMesh(grid);
+                                    if (mesh != null)
                                     {
-                                        // Use segments to build exact curves from Renga
-                                        var curves = new List<Rhino.Geometry.Curve>();
-                                        
-                                        foreach (var seg in segments)
-                                        {
-                                            var segType = seg["type"]?.ToString() ?? "LineSegment";
-                                            
-                                            // Get exact 3D coordinates from Renga
-                                            double segStartX = seg["start3DX"]?.Value<double>() ?? 0;
-                                            double segStartY = seg["start3DY"]?.Value<double>() ?? 0;
-                                            double segStartZ = seg["start3DZ"]?.Value<double>() ?? 0;
-                                            double segEndX = seg["end3DX"]?.Value<double>() ?? 0;
-                                            double segEndY = seg["end3DY"]?.Value<double>() ?? 0;
-                                            double segEndZ = seg["end3DZ"]?.Value<double>() ?? 0;
-                                            
-                                            var segStartPt = new Point3d(segStartX, segStartY, segStartZ);
-                                            var segEndPt = new Point3d(segEndX, segEndY, segEndZ);
-                                            
-                                            if (segType == "Arc")
-                                            {
-                                                // Handle Arc segment
-                                                double center3DX = seg["center3DX"]?.Value<double>() ?? 0;
-                                                double center3DY = seg["center3DY"]?.Value<double>() ?? 0;
-                                                double center3DZ = seg["center3DZ"]?.Value<double>() ?? segStartZ;
-                                                double radius = seg["radius"]?.Value<double>() ?? 0;
-                                                
-                                                var centerPt = new Point3d(center3DX, center3DY, center3DZ);
-                                                
-                                                var plane = new Plane(centerPt, Vector3d.ZAxis);
-                                                var startVec = segStartPt - centerPt;
-                                                var endVec = segEndPt - centerPt;
-                                                double startAngle = Math.Atan2(startVec.Y, startVec.X);
-                                                double endAngle = Math.Atan2(endVec.Y, endVec.X);
-                                                
-                                                var arc = new Arc();
-                                                arc.Plane = plane;
-                                                arc.Radius = radius;
-                                                arc.StartAngle = startAngle;
-                                                arc.EndAngle = endAngle;
-                                                
-                                                curves.Add(arc.ToNurbsCurve());
-                                            }
-                                            else
-                                            {
-                                                // Handle LineSegment - use exact coordinates from Renga
-                                                var line = new Line(segStartPt, segEndPt);
-                                                curves.Add(new LineCurve(line));
-                                            }
-                                        }
-                                        
-                                        // Join all curves into one
-                                        if (curves.Count > 0)
-                                        {
-                                            var joinedCurves = Rhino.Geometry.Curve.JoinCurves(curves);
-                                            if (joinedCurves != null && joinedCurves.Length > 0)
-                                            {
-                                                baselineGeo = new GH_Curve(joinedCurves[0]);
-                                            }
-                                            else if (curves.Count == 1)
-                                            {
-                                                baselineGeo = new GH_Curve(curves[0]);
-                                            }
-                                        }
-                                    }
-                                    // If no segments, try to reconstruct based on type
-                                    else if (baselineType == "Arc")
-                                    {
-                                        // Fallback to Arc reconstruction if sampled points not available
-                                        var center = baselineObj["center"] as JObject;
-                                        var radius = baselineObj["radius"]?.Value<double>() ?? 0;
-                                        if (center != null)
-                                        {
-                                            double centerX = center["x"]?.Value<double>() ?? 0;
-                                            double centerY = center["y"]?.Value<double>() ?? 0;
-                                            double centerZ = center["z"]?.Value<double>() ?? 0;
-                                            
-                                            var startPt = new Point3d(startX, startY, startZ);
-                                            var endPt = new Point3d(endX, endY, endZ);
-                                            var centerPt = new Point3d(centerX, centerY, centerZ);
-                                            
-                                            var plane = new Plane(centerPt, Vector3d.ZAxis);
-                                            var startVec = startPt - centerPt;
-                                            var endVec = endPt - centerPt;
-                                            double startAngle = Math.Atan2(startVec.Y, startVec.X);
-                                            double endAngle = Math.Atan2(endVec.Y, endVec.X);
-                                            
-                                            var arc = new Arc();
-                                            arc.Plane = plane;
-                                            arc.Radius = radius;
-                                            arc.StartAngle = startAngle;
-                                            arc.EndAngle = endAngle;
-                                            baselineGeo = new GH_Curve(arc.ToNurbsCurve());
-                                        }
-                                        else
-                                        {
-                                            // If center is missing, fallback to line
-                                            var line = new Line(new Point3d(startX, startY, startZ), new Point3d(endX, endY, endZ));
-                                            baselineGeo = new GH_Line(line);
-                                        }
-                                    }
-                                    else
-                                    {
-                                        // Default: LineSegment
-                                        var line = new Line(new Point3d(startX, startY, startZ), new Point3d(endX, endY, endZ));
-                                        baselineGeo = new GH_Line(line);
-                                    }
-                                    
-                                    // Fallback: if no baseline was created, create a simple line from start/end points
-                                    if (baselineGeo == null)
-                                    {
-                                        var line = new Line(new Point3d(startX, startY, startZ), new Point3d(endX, endY, endZ));
-                                        baselineGeo = new GH_Line(line);
-                                    }
-                                }
-                                else
-                                {
-                                    // If startPoint or endPoint is null, create a null baseline
-                                    System.Diagnostics.Debug.WriteLine($"Warning: startPoint or endPoint is null for wall {id}");
-                                    baselineGeo = null;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Error parsing baseline: {ex.Message}");
-                            }
-                            // Always add something, even if null (Grasshopper will handle it)
-                            baselines.Add(baselineGeo);
-
-                            // Extract mesh
-                            IGH_GeometricGoo meshGeo = null;
-                            try
-                            {
-                                var meshArray = wall["mesh"] as JArray;
-                                if (meshArray != null && meshArray.Count > 0)
-                                {
-                                    var allVertices = new List<Point3f>();
-                                    var allFaces = new List<MeshFace>();
-
-                                    foreach (var meshObj in meshArray)
-                                    {
-                                        var grids = meshObj["grids"] as JArray;
-                                        if (grids != null)
-                                        {
-                                            int vertexOffset = allVertices.Count;
-                                            foreach (var gridObj in grids)
-                                            {
-                                                var vertices = gridObj["vertices"] as JArray;
-                                                var triangles = gridObj["triangles"] as JArray;
-
-                                                if (vertices != null)
-                                                {
-                                                    foreach (var v in vertices)
-                                                    {
-                                                        double x = v["x"]?.Value<double>() ?? 0;
-                                                        double y = v["y"]?.Value<double>() ?? 0;
-                                                        double z = v["z"]?.Value<double>() ?? 0;
-                                                        allVertices.Add(new Point3f((float)x, (float)y, (float)z));
-                                                    }
-                                                }
-
-                                                if (triangles != null)
-                                                {
-                                                    foreach (var tri in triangles)
-                                                    {
-                                                        var triArray = tri as JArray;
-                                                        if (triArray != null && triArray.Count >= 3)
-                                                        {
-                                                            int v0 = triArray[0].Value<int>() + vertexOffset;
-                                                            int v1 = triArray[1].Value<int>() + vertexOffset;
-                                                            int v2 = triArray[2].Value<int>() + vertexOffset;
-                                                            allFaces.Add(new MeshFace(v0, v1, v2));
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                vertexOffset = allVertices.Count;
-                                            }
-                                        }
-                                    }
-
-                                    if (allVertices.Count > 0)
-                                    {
-                                        var mesh = new Mesh();
-                                        mesh.Vertices.AddVertices(allVertices);
-                                        mesh.Faces.AddFaces(allFaces);
-                                        mesh.Normals.ComputeNormals();
-                                        mesh.Compact();
-                                        meshGeo = new GH_Mesh(mesh);
+                                        meshes.Add(mesh);
                                     }
                                 }
                             }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"Error parsing mesh: {ex.Message}");
-                            }
-                            meshes.Add(meshGeo);
-
-                            // Extract thickness
-                            var thickness = wall["thickness"]?.Value<double>() ?? 0.0;
-                            thicknesses.Add(thickness);
-
                         }
                     }
                 }
-                catch (Exception ex)
-                {
-                    success = false;
-                    messageStr = $"Error parsing response: {ex.Message}";
-                }
-            }
 
-            DA.SetData(0, success);
-            DA.SetData(1, messageStr);
-            DA.SetDataList(2, wallIds);
-            DA.SetDataList(3, wallNames);
-            DA.SetDataList(4, baselines);
-            DA.SetDataList(5, meshes);
-            DA.SetDataList(6, thicknesses);
+                DA.SetData(0, true);
+                DA.SetData(1, $"Found {walls.Count} walls");
+                DA.SetDataList(2, baselines);
+                DA.SetDataList(3, meshes);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, $"Error parsing response: {ex.Message}");
+                DA.SetData(0, false);
+                DA.SetData(1, $"Error parsing response: {ex.Message}");
+                DA.SetDataList(2, new List<Curve>());
+                DA.SetDataList(3, new List<Mesh>());
+            }
         }
 
+        private Curve ParseBaseline(JObject baselineObj)
+        {
+            try
+            {
+                var type = baselineObj["type"]?.Value<string>() ?? "";
+                var startPointObj = baselineObj["startPoint"] as JObject;
+                var endPointObj = baselineObj["endPoint"] as JObject;
+
+                if (startPointObj == null || endPointObj == null)
+                    return null;
+
+                var startX = startPointObj["x"]?.Value<double>() ?? 0;
+                var startY = startPointObj["y"]?.Value<double>() ?? 0;
+                var startZ = startPointObj["z"]?.Value<double>() ?? 0;
+                var endX = endPointObj["x"]?.Value<double>() ?? 0;
+                var endY = endPointObj["y"]?.Value<double>() ?? 0;
+                var endZ = endPointObj["z"]?.Value<double>() ?? 0;
+
+                var startPt = new Point3d(startX, startY, startZ);
+                var endPt = new Point3d(endX, endY, endZ);
+
+                // Handle different curve types
+                // For arcs, use sampled points to create accurate curve
+                if (type.Contains("Arc") || type.Contains("arc"))
+                {
+                    // Use sampled points if available - they are already calculated correctly
+                    var sampledPoints = baselineObj["sampledPoints"] as JArray;
+                    if (sampledPoints != null && sampledPoints.Count >= 2)
+                    {
+                        var points = new List<Point3d>();
+                        foreach (var ptToken in sampledPoints)
+                        {
+                            var ptObj = ptToken as JObject;
+                            if (ptObj != null)
+                            {
+                                var x = ptObj["x"]?.Value<double>() ?? 0;
+                                var y = ptObj["y"]?.Value<double>() ?? 0;
+                                var z = ptObj["z"]?.Value<double>() ?? 0;
+                                points.Add(new Point3d(x, y, z));
+                            }
+                        }
+                        
+                        // CRITICAL: For arcs, ALWAYS use PolylineCurve from ALL sampled points
+                        // This preserves the exact wall baseline direction and ensures it matches the mesh
+                        // Do NOT try to create Arc from three points - this may choose wrong direction
+                        if (points.Count >= 2)
+                        {
+                            return new PolylineCurve(points);
+                        }
+                    }
+                    
+                    // Fallback: simple line if no sampled points
+                    return new Line(startPt, endPt).ToNurbsCurve();
+                }
+
+                // Use sampled points if available
+                var sampledPoints2 = baselineObj["sampledPoints"] as JArray;
+                if (sampledPoints2 != null && sampledPoints2.Count >= 2)
+                {
+                    var points = new List<Point3d>();
+                    foreach (var ptToken in sampledPoints2)
+                    {
+                        var ptObj = ptToken as JObject;
+                        if (ptObj != null)
+                        {
+                            var x = ptObj["x"]?.Value<double>() ?? 0;
+                            var y = ptObj["y"]?.Value<double>() ?? 0;
+                            var z = ptObj["z"]?.Value<double>() ?? 0;
+                            points.Add(new Point3d(x, y, z));
+                        }
+                    }
+                    if (points.Count >= 2)
+                    {
+                        if (points.Count == 2)
+                        {
+                            return new Line(points[0], points[1]).ToNurbsCurve();
+                        }
+                        else
+                        {
+                            return new PolylineCurve(points);
+                        }
+                    }
+                }
+
+                // Fallback: simple line
+                return new Line(startPt, endPt).ToNurbsCurve();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error parsing baseline: {ex.Message}");
+                return null;
+            }
+        }
+
+        private Mesh ParseMesh(JObject gridObj)
+        {
+            try
+            {
+                var vertices = gridObj["vertices"] as JArray;
+                var triangles = gridObj["triangles"] as JArray;
+
+                if (vertices == null || triangles == null)
+                    return null;
+
+                var mesh = new Mesh();
+
+                // Add vertices
+                foreach (var vToken in vertices)
+                {
+                    var vObj = vToken as JObject;
+                    if (vObj != null)
+                    {
+                        var x = vObj["x"]?.Value<double>() ?? 0;
+                        var y = vObj["y"]?.Value<double>() ?? 0;
+                        var z = vObj["z"]?.Value<double>() ?? 0;
+                        mesh.Vertices.Add(x, y, z);
+                    }
+                }
+
+                // Add faces
+                foreach (var tToken in triangles)
+                {
+                    var tArray = tToken as JArray;
+                    if (tArray != null && tArray.Count >= 3)
+                    {
+                        var i0 = tArray[0]?.Value<int>() ?? 0;
+                        var i1 = tArray[1]?.Value<int>() ?? 0;
+                        var i2 = tArray[2]?.Value<int>() ?? 0;
+                        mesh.Faces.AddFace(i0, i1, i2);
+                    }
+                }
+
+                if (mesh.Vertices.Count > 0 && mesh.Faces.Count > 0)
+                {
+                    mesh.Normals.ComputeNormals();
+                    return mesh;
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error parsing mesh: {ex.Message}");
+                return null;
+            }
+        }
 
         protected override Bitmap Icon
         {
@@ -470,8 +400,5 @@ namespace GrasshopperRNG.Components
                 return null;
             }
         }
-
-        public override Guid ComponentGuid => new Guid("06660b3d-4ea9-4eaf-b9c0-d884b1667356");
     }
 }
-

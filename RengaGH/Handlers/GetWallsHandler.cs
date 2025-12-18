@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.IO;
 using Renga;
 using RengaPlugin.Commands;
 using RengaPlugin.Connection;
@@ -15,10 +16,24 @@ namespace RengaPlugin.Handlers
     public class GetWallsHandler : ICommandHandler
     {
         private Renga.IApplication m_app;
+        private static string logFilePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Renga", "RengaGH_GetWalls.log");
 
         public GetWallsHandler(Renga.IApplication app)
         {
             m_app = app;
+        }
+
+        private void LogToFile(string message)
+        {
+            try
+            {
+                var logDir = Path.GetDirectoryName(logFilePath);
+                if (!Directory.Exists(logDir))
+                    Directory.CreateDirectory(logDir);
+                
+                File.AppendAllText(logFilePath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}\n");
+            }
+            catch { }
         }
 
         public ConnectionResponse Handle(ConnectionMessage message)
@@ -39,6 +54,28 @@ namespace RengaPlugin.Handlers
                 var walls = new List<object>();
                 var objects = model.GetObjects();
                 int count = objects.Count;
+                
+                // Track wall IDs to ensure uniqueness
+                var wallIds = new HashSet<int>();
+
+                // Get exported 3D objects for mesh extraction
+                var dataExporter = m_app.Project.DataExporter;
+                var exportedObjects3D = dataExporter?.GetObjects3D();
+                var exportedObjectsMap = new Dictionary<int, Renga.IExportedObject3D>();
+                
+                if (exportedObjects3D != null)
+                {
+                    int exportedCount = exportedObjects3D.Count;
+                    for (int i = 0; i < exportedCount; i++)
+                    {
+                        try
+                        {
+                            var exportedObj = exportedObjects3D.Get(i);
+                            exportedObjectsMap[exportedObj.ModelObjectId] = exportedObj;
+                        }
+                        catch { }
+                    }
+                }
 
                 for (int i = 0; i < count; i++)
                 {
@@ -50,8 +87,18 @@ namespace RengaPlugin.Handlers
                             var wall = obj as Renga.ILevelObject;
                             if (wall != null)
                             {
-                                var placement = wall.GetPlacement();
                                 var modelObject = obj as Renga.IModelObject;
+                                int wallId = modelObject.Id;
+                                
+                                // Check for duplicate IDs (should not happen, but safety check)
+                                if (wallIds.Contains(wallId))
+                                {
+                                    LogToFile($"WARNING: Duplicate wall ID detected: {wallId}. Skipping duplicate.");
+                                    continue;
+                                }
+                                wallIds.Add(wallId);
+                                
+                                var placement = wall.GetPlacement();
                                 
                                 // Get wall parameters
                                 double height = 0;
@@ -80,11 +127,15 @@ namespace RengaPlugin.Handlers
                                 }
                                 catch { }
                                 
-                                // Get baseline curve
-                                object baselineData = ExtractBaselineData(obj);
+                                // Get baseline curve using IWallParams and IWallContour
+                                object baselineData = ExtractBaselineData(obj, placement);
                                 
-                                // Get mesh geometry
-                                object meshData = ExtractMeshData(modelObject);
+                                // Get mesh geometry from exported 3D object
+                                object meshData = null;
+                                if (exportedObjectsMap.TryGetValue(obj.Id, out var exportedObj3D))
+                                {
+                                    meshData = ExtractMeshDataFromExported(exportedObj3D);
+                                }
                                 
                                 var wallData = new
                                 {
@@ -108,7 +159,7 @@ namespace RengaPlugin.Handlers
                     catch (Exception ex)
                     {
                         // Skip this object if there's an error
-                        System.Diagnostics.Debug.WriteLine($"Error processing wall object: {ex.Message}");
+                        LogToFile($"Error processing wall object: {ex.Message}");
                     }
                 }
 
@@ -136,95 +187,457 @@ namespace RengaPlugin.Handlers
             }
         }
 
-        private object ExtractBaselineData(Renga.IModelObject wallObj)
+        private object ExtractBaselineData(Renga.IModelObject wallObj, Renga.IPlacement3D placement)
         {
             try
             {
-                // Cast to ILevelObject to access wall-specific methods
-                var levelObj = wallObj as Renga.ILevelObject;
-                if (levelObj == null)
-                    return null;
-
-                // Try multiple approaches to get baseline
-                object baseline = null;
+                LogToFile($"Wall {wallObj.Id}: Starting baseline extraction...");
                 
-                // Approach 1: Try GetBaseline method via reflection (case-insensitive, check all methods)
-                try
+                // CRITICAL FIX: Use IWallParams -> GetContour() -> IWallContour.GetBaseline()
+                // This gives us baseline2D which is already in GLOBAL coordinates
+                var wallParams = wallObj as Renga.IWallParams;
+                if (wallParams == null)
                 {
-                    var wallType = wallObj.GetType();
-                    var allMethods = wallType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-                    
-                    // Look for GetBaseline method (case-insensitive)
-                    var getBaselineMethod = Array.Find(allMethods, m => 
-                        m.Name.Equals("GetBaseline", StringComparison.OrdinalIgnoreCase) && 
-                        m.GetParameters().Length == 0);
-                    
-                    if (getBaselineMethod != null)
-                    {
-                        baseline = getBaselineMethod.Invoke(wallObj, null);
-                        System.Diagnostics.Debug.WriteLine($"Found GetBaseline method, result: {(baseline != null ? "not null" : "null")}");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"GetBaseline method not found. Available methods: {string.Join(", ", allMethods.Select(m => m.Name))}");
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Error getting baseline via reflection: {ex.Message}\n{ex.StackTrace}");
+                    LogToFile($"Wall {wallObj.Id}: Failed to cast to IWallParams");
+                    return null;
                 }
 
-                // Approach 2: Try using dynamic
-                if (baseline == null)
+                var wallContour = wallParams.GetContour();
+                if (wallContour == null)
                 {
-                    try
-                    {
-                        dynamic wallDynamic = wallObj;
-                        baseline = wallDynamic.GetBaseline();
-                        System.Diagnostics.Debug.WriteLine($"Dynamic approach result: {(baseline != null ? "not null" : "null")}");
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error with dynamic approach: {ex.Message}");
-                    }
+                    LogToFile($"Wall {wallObj.Id}: GetContour() returned null");
+                    return null;
                 }
 
-                // Approach 3: Try to get baseline from placement or other properties
-                if (baseline == null)
+                var baseline2D = wallContour.GetBaseline();
+                if (baseline2D == null)
                 {
+                    LogToFile($"Wall {wallObj.Id}: GetBaseline() returned null");
+                    return null;
+                }
+
+                // Get Z coordinate from placement if available
+                double zCoord = 0.0;
+                if (placement != null)
+                {
+                    zCoord = placement.Origin.Z;
+                    LogToFile($"Wall {wallObj.Id}: placement origin=({placement.Origin.X}, {placement.Origin.Y}, {placement.Origin.Z})");
+                }
+
+                // CRITICAL: baseline2D from IWallContour.GetBaseline() is already in GLOBAL coordinates
+                // Do NOT use CreateCurve3D with placement, as it applies incorrect transformation
+                // Use baseline2D coordinates directly (they are already global)
+
+                var baselineData = new Dictionary<string, object>();
+                
+                // Get curve type
+                var curveType = baseline2D.Curve2DType;
+                string curveTypeStr = curveType.ToString();
+                baselineData["type"] = curveTypeStr;
+                LogToFile($"Wall {wallObj.Id}: baseline2D type={curveTypeStr}");
+
+                // Get start and end points from baseline2D (already global coordinates)
+                var startPoint2D = baseline2D.GetBeginPoint();
+                var endPoint2D = baseline2D.GetEndPoint();
+                
+                LogToFile($"Wall {wallObj.Id}: baseline2D start=({startPoint2D.X}, {startPoint2D.Y}), end=({endPoint2D.X}, {endPoint2D.Y})");
+
+                // Convert to 3D by adding Z coordinate
+                var startPoint3D = new Renga.Point3D
+                {
+                    X = startPoint2D.X,
+                    Y = startPoint2D.Y,
+                    Z = zCoord
+                };
+
+                var endPoint3D = new Renga.Point3D
+                {
+                    X = endPoint2D.X,
+                    Y = endPoint2D.Y,
+                    Z = zCoord
+                };
+
+                baselineData["startPoint"] = new Dictionary<string, object>
+                {
+                    { "x", startPoint3D.X },
+                    { "y", startPoint3D.Y },
+                    { "z", startPoint3D.Z }
+                };
+
+                baselineData["endPoint"] = new Dictionary<string, object>
+                {
+                    { "x", endPoint3D.X },
+                    { "y", endPoint3D.Y },
+                    { "z", endPoint3D.Z }
+                };
+
+                // Handle different curve types
+                List<Dictionary<string, object>> sampledPoints = null;
+
+                // Check curve type using Curve2DType enum
+                if (curveType == Renga.Curve2DType.Curve2DType_LineSegment)
+                {
+                    // For lines, just use start and end points
+                    sampledPoints = new List<Dictionary<string, object>>
+                    {
+                        new Dictionary<string, object> { { "x", startPoint3D.X }, { "y", startPoint3D.Y }, { "z", startPoint3D.Z } },
+                        new Dictionary<string, object> { { "x", endPoint3D.X }, { "y", endPoint3D.Y }, { "z", endPoint3D.Z } }
+                    };
+                }
+                else if (curveType == Renga.Curve2DType.Curve2DType_Arc)
+                {
+                    // CRITICAL: For arcs, we MUST use the exact direction from baseline2D
+                    // Do NOT choose shortest arc - use the actual wall baseline direction
                     try
                     {
-                        // Maybe baseline is accessible through placement or other properties
-                        var placement = levelObj.GetPlacement();
-                        if (placement != null)
+                        var arc2D = baseline2D as Renga.IArc2D;
+                        if (arc2D != null)
                         {
-                            System.Diagnostics.Debug.WriteLine($"Placement found: Origin=({placement.Origin.X}, {placement.Origin.Y}, {placement.Origin.Z})");
-                            // Check if there's a way to get baseline from placement
-                            // This might not work, but worth trying
+                            var center2D = arc2D.GetCenter();
+                            double radius = arc2D.GetRadius();
+                            
+                            // CRITICAL: Use CreateCurve3D to get sampled points in the CORRECT direction
+                            // This preserves the actual wall baseline direction, not the shortest arc
+                            // Use null placement to avoid double transformation (baseline2D is already global)
+                            var baseline3D = baseline2D.CreateCurve3D(null);
+                            if (baseline3D == null)
+                            {
+                                // Fallback: try with placement if null doesn't work
+                                baseline3D = baseline2D.CreateCurve3D(placement);
+                            }
+                            
+                            if (baseline3D != null)
+                            {
+                                LogToFile($"Wall {wallObj.Id}: Using CreateCurve3D for arc sampling to preserve correct direction");
+                                
+                                // Sample points from the actual curve direction
+                                sampledPoints = new List<Dictionary<string, object>>();
+                                int arcSamples = 50;
+                                
+                                // Always add start point
+                                try
+                                {
+                                    var startPt = baseline3D.GetBeginPoint();
+                                    sampledPoints.Add(new Dictionary<string, object>
+                                    {
+                                        { "x", startPt.X },
+                                        { "y", startPt.Y },
+                                        { "z", startPt.Z }
+                                    });
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogToFile($"Wall {wallObj.Id}: Error getting start point: {ex.Message}");
+                                }
+                                
+                                // Try to get intermediate points
+                                for (int i = 1; i < arcSamples; i++)
+                                {
+                                    double t = (double)i / arcSamples;
+                                    try
+                                    {
+                                        // Try to get point at parameter using reflection
+                                        Renga.Point3D? point3D = null;
+                                        
+                                        var baselineType = baseline3D.GetType();
+                                        var getPointAtMethod = baselineType.GetMethod("GetPointAt", new Type[] { typeof(double) });
+                                        if (getPointAtMethod != null)
+                                        {
+                                            var result = getPointAtMethod.Invoke(baseline3D, new object[] { t });
+                                            if (result is Renga.Point3D pt)
+                                            {
+                                                point3D = pt;
+                                            }
+                                        }
+                                        
+                                        if (point3D.HasValue)
+                                        {
+                                            var pt = point3D.Value;
+                                            sampledPoints.Add(new Dictionary<string, object>
+                                            {
+                                                { "x", pt.X },
+                                                { "y", pt.Y },
+                                                { "z", pt.Z }
+                                            });
+                                        }
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        LogToFile($"Wall {wallObj.Id}: Error sampling arc point at t={t}: {ex.Message}");
+                                    }
+                                }
+                                
+                                // Always add end point
+                                try
+                                {
+                                    var endPt = baseline3D.GetEndPoint();
+                                    sampledPoints.Add(new Dictionary<string, object>
+                                    {
+                                        { "x", endPt.X },
+                                        { "y", endPt.Y },
+                                        { "z", endPt.Z }
+                                    });
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogToFile($"Wall {wallObj.Id}: Error getting end point: {ex.Message}");
+                                }
+                                
+                                // Also store center and radius for reference
+                                baselineData["center"] = new Dictionary<string, object>
+                                {
+                                    { "x", center2D.X },
+                                    { "y", center2D.Y },
+                                    { "z", zCoord }
+                                };
+                                baselineData["radius"] = radius;
+                                
+                                LogToFile($"Wall {wallObj.Id}: Sampled {sampledPoints.Count} points from arc using CreateCurve3D (preserving wall direction)");
+                                
+                                // If we got only 2 points (start and end), fall back to trigonometric calculation
+                                if (sampledPoints.Count <= 2)
+                                {
+                                    LogToFile($"Wall {wallObj.Id}: Only got {sampledPoints.Count} points from CreateCurve3D, falling back to trigonometric calculation");
+                                    sampledPoints = null; // Will trigger fallback below
+                                }
+                            }
+                            
+                            // Fallback: if CreateCurve3D failed or returned only 2 points, use trigonometric calculation
+                            if (baseline3D == null || sampledPoints == null || sampledPoints.Count <= 2)
+                            {
+                                if (baseline3D == null)
+                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned null, using trigonometric calculation");
+                                else
+                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned insufficient points, using trigonometric calculation");
+                                
+                                // Calculate angles from actual start and end points
+                                double startAngle = Math.Atan2(startPoint2D.Y - center2D.Y, startPoint2D.X - center2D.X);
+                                double endAngle = Math.Atan2(endPoint2D.Y - center2D.Y, endPoint2D.X - center2D.X);
+                                
+                                // CRITICAL: Do NOT choose shortest arc - preserve direction
+                                // If endAngle < startAngle, we need to go the long way (add 2π)
+                                if (endAngle < startAngle)
+                                    endAngle += 2 * Math.PI;
+                                
+                                LogToFile($"Wall {wallObj.Id}: Arc center=({center2D.X}, {center2D.Y}), radius={radius}, startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°)");
+
+                                // Sample points following the actual direction (not shortest)
+                                sampledPoints = new List<Dictionary<string, object>>();
+                                int arcSamples = 50;
+                                for (int i = 0; i <= arcSamples; i++)
+                                {
+                                    double t = (double)i / arcSamples;
+                                    double angle = startAngle + (endAngle - startAngle) * t;
+                                    var point2D = new Renga.Point2D
+                                    {
+                                        X = center2D.X + radius * Math.Cos(angle),
+                                        Y = center2D.Y + radius * Math.Sin(angle)
+                                    };
+                                    // Use baseline2D directly as global coordinates (no placement transformation)
+                                    var point3D = new Renga.Point3D
+                                    {
+                                        X = point2D.X,
+                                        Y = point2D.Y,
+                                        Z = zCoord
+                                    };
+                                    sampledPoints.Add(new Dictionary<string, object>
+                                    {
+                                        { "x", point3D.X },
+                                        { "y", point3D.Y },
+                                        { "z", point3D.Z }
+                                    });
+                                }
+                                baselineData["center"] = new Dictionary<string, object>
+                                {
+                                    { "x", center2D.X },
+                                    { "y", center2D.Y },
+                                    { "z", zCoord }
+                                };
+                                baselineData["radius"] = radius;
+                                LogToFile($"Wall {wallObj.Id}: Recalculated {sampledPoints.Count} sampled points for Arc (preserving direction)");
+                            }
                         }
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Error getting placement: {ex.Message}");
+                        LogToFile($"Wall {wallObj.Id}: Error processing arc: {ex.Message}");
+                    }
+                }
+                else if (curveType == Renga.Curve2DType.Curve2DType_PolyCurve)
+                {
+                    var polyCurve2D = baseline2D as Renga.IPolyCurve2D;
+                    if (polyCurve2D != null)
+                    {
+                        // For polycurves, sample each segment
+                        sampledPoints = new List<Dictionary<string, object>>();
+                        int segmentCount = polyCurve2D.GetSegmentCount();
+                        LogToFile($"Wall {wallObj.Id}: PolyCurve with {segmentCount} segments");
+                        
+                        for (int segIdx = 0; segIdx < segmentCount; segIdx++)
+                        {
+                            try
+                            {
+                                var segment = polyCurve2D.GetSegment(segIdx);
+                                if (segment != null)
+                                {
+                                    // Sample the segment using CreateCurve3D for complex curves
+                                    // But only for sampling, not for the main coordinates
+                                    var segment3D = segment.CreateCurve3D(placement);
+                                    if (segment3D != null)
+                                    {
+                                        int samples = 10;
+                                        for (int i = 0; i <= samples; i++)
+                                        {
+                                            double t = (double)i / samples;
+                                        try
+                                        {
+                                            // Try different methods to get point at parameter
+                                            Renga.Point3D? point3D = null;
+                                            
+                                            // Try GetPointAt method via reflection
+                                            var segmentType = segment3D.GetType();
+                                            var getPointAtMethod = segmentType.GetMethod("GetPointAt", new Type[] { typeof(double) });
+                                            if (getPointAtMethod != null)
+                                            {
+                                                var result = getPointAtMethod.Invoke(segment3D, new object[] { t });
+                                                if (result is Renga.Point3D pt)
+                                                {
+                                                    point3D = pt;
+                                                }
+                                            }
+                                            
+                                            // Fallback: use start/end points for first/last sample
+                                            if (!point3D.HasValue)
+                                            {
+                                                if (i == 0)
+                                                    point3D = segment3D.GetBeginPoint();
+                                                else if (i == samples)
+                                                    point3D = segment3D.GetEndPoint();
+                                                else
+                                                    continue; // Skip intermediate points if we can't get them
+                                            }
+                                            
+                                            if (point3D.HasValue)
+                                            {
+                                                var pt = point3D.Value;
+                                                sampledPoints.Add(new Dictionary<string, object>
+                                                {
+                                                    { "x", pt.X },
+                                                    { "y", pt.Y },
+                                                    { "z", pt.Z }
+                                                });
+                                            }
+                                        }
+                                            catch { }
+                                        }
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogToFile($"Wall {wallObj.Id}: Error sampling segment {segIdx}: {ex.Message}");
+                            }
+                        }
+                        
+                        if (sampledPoints.Count == 0)
+                        {
+                            // Fallback: use start and end points
+                            sampledPoints.Add(new Dictionary<string, object> { { "x", startPoint3D.X }, { "y", startPoint3D.Y }, { "z", startPoint3D.Z } });
+                            sampledPoints.Add(new Dictionary<string, object> { { "x", endPoint3D.X }, { "y", endPoint3D.Y }, { "z", endPoint3D.Z } });
+                        }
+                    }
+                }
+                else
+                {
+                    // For other curve types, try to sample using CreateCurve3D
+                    // But remember: baseline2D coordinates are already global
+                    try
+                    {
+                        var baseline3D = baseline2D.CreateCurve3D(placement);
+                        if (baseline3D != null)
+                        {
+                            LogToFile($"Wall {wallObj.Id}: Using CreateCurve3D for sampling (type: {curveTypeStr})");
+                            sampledPoints = new List<Dictionary<string, object>>();
+                            int samples = 50;
+                            for (int i = 0; i <= samples; i++)
+                            {
+                                double t = (double)i / samples;
+                                try
+                                {
+                                    // Try different methods to get point at parameter
+                                    Renga.Point3D? point3D = null;
+                                    
+                                    // Try GetPointAt method via reflection
+                                    var baselineType = baseline3D.GetType();
+                                    var getPointAtMethod = baselineType.GetMethod("GetPointAt", new Type[] { typeof(double) });
+                                    if (getPointAtMethod != null)
+                                    {
+                                        var result = getPointAtMethod.Invoke(baseline3D, new object[] { t });
+                                        if (result is Renga.Point3D pt)
+                                        {
+                                            point3D = pt;
+                                        }
+                                    }
+                                    
+                                    // Fallback: use start/end points for first/last sample
+                                    if (!point3D.HasValue)
+                                    {
+                                        if (i == 0)
+                                            point3D = baseline3D.GetBeginPoint();
+                                        else if (i == samples)
+                                            point3D = baseline3D.GetEndPoint();
+                                        else
+                                            continue; // Skip intermediate points if we can't get them
+                                    }
+                                    
+                                    if (point3D.HasValue)
+                                    {
+                                        var pt = point3D.Value;
+                                        sampledPoints.Add(new Dictionary<string, object>
+                                        {
+                                            { "x", pt.X },
+                                            { "y", pt.Y },
+                                            { "z", pt.Z }
+                                        });
+                                    }
+                                }
+                                catch { }
+                            }
+                            LogToFile($"Wall {wallObj.Id}: Sampled {sampledPoints.Count} points using CreateCurve3D");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Wall {wallObj.Id}: Error using CreateCurve3D: {ex.Message}");
+                    }
+                    
+                    // Fallback: use start and end points
+                    if (sampledPoints == null || sampledPoints.Count == 0)
+                    {
+                        sampledPoints = new List<Dictionary<string, object>>
+                        {
+                            new Dictionary<string, object> { { "x", startPoint3D.X }, { "y", startPoint3D.Y }, { "z", startPoint3D.Z } },
+                            new Dictionary<string, object> { { "x", endPoint3D.X }, { "y", endPoint3D.Y }, { "z", endPoint3D.Z } }
+                        };
                     }
                 }
 
-                if (baseline != null)
+                if (sampledPoints != null && sampledPoints.Count > 0)
                 {
-                    return ExtractBaselineFromCurve(baseline);
+                    baselineData["sampledPoints"] = sampledPoints;
                 }
 
-                System.Diagnostics.Debug.WriteLine("All approaches failed to get baseline");
-                return null;
+                LogToFile($"Wall {wallObj.Id}: Baseline extraction completed successfully");
+                return baselineData;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error extracting baseline: {ex.Message}\n{ex.StackTrace}");
+                LogToFile($"Error extracting baseline: {ex.Message}\n{ex.StackTrace}");
                 return null;
             }
         }
 
-        private object ExtractBaselineFromCurve(dynamic baseline)
+        private object ExtractBaselineFromCurve3D(Renga.ICurve3D baseline)
         {
             try
             {
@@ -232,218 +645,79 @@ namespace RengaPlugin.Handlers
                     return null;
 
                 var baselineObj = new Dictionary<string, object>();
-                var baselineType = baseline.GetType();
                 
-                // Get curve type
-                string curveTypeStr = "LineSegment";
-                try
-                {
-                    var getCurveTypeMethod = baselineType.GetMethod("GetCurveType");
-                    if (getCurveTypeMethod != null)
-                    {
-                        var curveType = getCurveTypeMethod.Invoke(baseline, null);
-                        curveTypeStr = curveType?.ToString() ?? "LineSegment";
-                        baselineObj["type"] = curveTypeStr;
-                    }
-                }
-                catch
-                {
-                    baselineObj["type"] = curveTypeStr;
-                }
-
+                // Get curve type using ICurve3D interface
+                var curveType = baseline.Curve3DType;
+                string curveTypeStr = curveType.ToString();
+                baselineObj["type"] = curveTypeStr;
+                
                 // Get start and end points
                 try
                 {
-                    var getStartPointMethod = baselineType.GetMethod("GetStartPoint");
-                    var getEndPointMethod = baselineType.GetMethod("GetEndPoint");
-                    if (getStartPointMethod != null && getEndPointMethod != null)
-                    {
-                        var startPoint = getStartPointMethod.Invoke(baseline, null);
-                        var endPoint = getEndPointMethod.Invoke(baseline, null);
-                        
-                        if (startPoint != null && endPoint != null)
-                        {
-                            var pointType = startPoint.GetType();
-                            var xProp = pointType.GetProperty("X");
-                            var yProp = pointType.GetProperty("Y");
-                            var zProp = pointType.GetProperty("Z");
-                            
-                            if (xProp != null && yProp != null && zProp != null)
-                            {
-                                baselineObj["startPoint"] = new { 
-                                    x = (double)xProp.GetValue(startPoint), 
-                                    y = (double)yProp.GetValue(startPoint), 
-                                    z = (double)zProp.GetValue(startPoint) 
-                                };
-                                baselineObj["endPoint"] = new { 
-                                    x = (double)xProp.GetValue(endPoint), 
-                                    y = (double)yProp.GetValue(endPoint), 
-                                    z = (double)zProp.GetValue(endPoint) 
-                                };
-                            }
-                        }
-                    }
+                    var startPoint = baseline.GetBeginPoint();
+                    var endPoint = baseline.GetEndPoint();
+                    
+                    baselineObj["startPoint"] = new { 
+                        x = startPoint.X, 
+                        y = startPoint.Y, 
+                        z = startPoint.Z 
+                    };
+                    baselineObj["endPoint"] = new { 
+                        x = endPoint.X, 
+                        y = endPoint.Y, 
+                        z = endPoint.Z 
+                    };
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"Error getting start/end points: {ex.Message}");
+                    LogToFile($"Error getting start/end points: {ex.Message}");
                 }
 
-                // For polycurves, extract segments with exact 3D coordinates
-                if (curveTypeStr.Contains("PolyCurve") || curveTypeStr.Contains("Polyline"))
+                // For polycurves, extract segments
+                if (baseline is Renga.IPolyCurve3D polyCurve)
                 {
                     var segments = new List<object>();
                     try
                     {
-                        // Try to get segment count
-                        var getSegmentCountMethod = baselineType.GetMethod("GetSegmentCount");
-                        if (getSegmentCountMethod != null)
+                        int segmentCount = polyCurve.GetSegmentCount();
+                        for (int i = 0; i < segmentCount; i++)
                         {
-                            int segmentCount = (int)getSegmentCountMethod.Invoke(baseline, null);
-                            
-                            // Get each segment
-                            var getSegmentMethod = baselineType.GetMethod("GetSegment", new Type[] { typeof(int) });
-                            if (getSegmentMethod != null)
+                            try
                             {
-                                for (int i = 0; i < segmentCount; i++)
-                                {
-                                    try
-                                    {
-                                        var segment = getSegmentMethod.Invoke(baseline, new object[] { i });
-                                        if (segment != null)
-                                        {
-                                            var segmentType = segment.GetType();
-                                            var segObj = new Dictionary<string, object>();
-                                            
-                                            // Get segment type
-                                            var segGetCurveTypeMethod = segmentType.GetMethod("GetCurveType");
-                                            if (segGetCurveTypeMethod != null)
-                                            {
-                                                var segCurveType = segGetCurveTypeMethod.Invoke(segment, null);
-                                                segObj["type"] = segCurveType?.ToString() ?? "LineSegment";
-                                            }
-                                            else
-                                            {
-                                                segObj["type"] = "LineSegment";
-                                            }
-                                            
-                                            // Get segment start and end points with 3D coordinates
-                                            var segGetStartMethod = segmentType.GetMethod("GetStartPoint");
-                                            var segGetEndMethod = segmentType.GetMethod("GetEndPoint");
-                                            if (segGetStartMethod != null && segGetEndMethod != null)
-                                            {
-                                                var segStart = segGetStartMethod.Invoke(segment, null);
-                                                var segEnd = segGetEndMethod.Invoke(segment, null);
-                                                
-                                                if (segStart != null && segEnd != null)
-                                                {
-                                                    var pointType = segStart.GetType();
-                                                    var xProp = pointType.GetProperty("X");
-                                                    var yProp = pointType.GetProperty("Y");
-                                                    var zProp = pointType.GetProperty("Z");
-                                                    
-                                                    if (xProp != null && yProp != null && zProp != null)
-                                                    {
-                                                        segObj["start3DX"] = (double)xProp.GetValue(segStart);
-                                                        segObj["start3DY"] = (double)yProp.GetValue(segStart);
-                                                        segObj["start3DZ"] = (double)zProp.GetValue(segStart);
-                                                        segObj["end3DX"] = (double)xProp.GetValue(segEnd);
-                                                        segObj["end3DY"] = (double)yProp.GetValue(segEnd);
-                                                        segObj["end3DZ"] = (double)zProp.GetValue(segEnd);
-                                                    }
-                                                }
-                                            }
-                                            
-                                            // For arcs, get center and radius
-                                            if (segObj["type"].ToString().Contains("Arc"))
-                                            {
-                                                try
-                                                {
-                                                    var segGetCenterMethod = segmentType.GetMethod("GetCenter");
-                                                    var segGetRadiusMethod = segmentType.GetMethod("GetRadius");
-                                                    if (segGetCenterMethod != null && segGetRadiusMethod != null)
-                                                    {
-                                                        var center = segGetCenterMethod.Invoke(segment, null);
-                                                        var radius = segGetRadiusMethod.Invoke(segment, null);
-                                                        
-                                                        if (center != null)
-                                                        {
-                                                            var pointType = center.GetType();
-                                                            var xProp = pointType.GetProperty("X");
-                                                            var yProp = pointType.GetProperty("Y");
-                                                            var zProp = pointType.GetProperty("Z");
-                                                            
-                                                            if (xProp != null && yProp != null && zProp != null)
-                                                            {
-                                                                segObj["center3DX"] = (double)xProp.GetValue(center);
-                                                                segObj["center3DY"] = (double)yProp.GetValue(center);
-                                                                segObj["center3DZ"] = (double)zProp.GetValue(center);
-                                                            }
-                                                        }
-                                                        
-                                                        if (radius != null)
-                                                        {
-                                                            segObj["radius"] = (double)radius;
-                                                        }
-                                                    }
-                                                }
-                                                catch { }
-                                            }
-                                            
-                                            segments.Add(segObj);
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"Error extracting segment {i}: {ex.Message}");
-                                    }
-                                }
+                                var segment = polyCurve.GetSegment(i);
+                                var segObj = ExtractBaselineFromCurve3D(segment);
+                                if (segObj != null)
+                                    segments.Add(segObj);
+                            }
+                            catch (Exception ex)
+                            {
+                                LogToFile($"Error extracting segment {i}: {ex.Message}");
                             }
                         }
+                        baselineObj["segments"] = segments;
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"Error extracting segments: {ex.Message}");
+                        LogToFile($"Error extracting segments: {ex.Message}");
                     }
-                    
-                    baselineObj["segments"] = segments;
                 }
                 // For arcs, get center and radius
-                else if (curveTypeStr.Contains("Arc"))
+                else if (baseline is Renga.IArc3D arc)
                 {
                     try
                     {
-                        var getCenterMethod = baselineType.GetMethod("GetCenter");
-                        var getRadiusMethod = baselineType.GetMethod("GetRadius");
-                        if (getCenterMethod != null && getRadiusMethod != null)
-                        {
-                            var center = getCenterMethod.Invoke(baseline, null);
-                            var radius = getRadiusMethod.Invoke(baseline, null);
-                            
-                            if (center != null)
-                            {
-                                var pointType = center.GetType();
-                                var xProp = pointType.GetProperty("X");
-                                var yProp = pointType.GetProperty("Y");
-                                var zProp = pointType.GetProperty("Z");
-                                
-                                if (xProp != null && yProp != null && zProp != null)
-                                {
-                                    baselineObj["center"] = new { 
-                                        x = (double)xProp.GetValue(center), 
-                                        y = (double)yProp.GetValue(center), 
-                                        z = (double)zProp.GetValue(center) 
-                                    };
-                                }
-                            }
-                            
-                            if (radius != null)
-                            {
-                                baselineObj["radius"] = (double)radius;
-                            }
-                        }
+                        var center = arc.GetCenter();
+                        baselineObj["center"] = new { 
+                            x = center.X, 
+                            y = center.Y, 
+                            z = center.Z 
+                        };
+                        baselineObj["radius"] = arc.GetRadius();
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Error getting arc properties: {ex.Message}");
+                    }
                 }
 
                 return baselineObj;
@@ -451,6 +725,107 @@ namespace RengaPlugin.Handlers
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error extracting baseline from curve: {ex.Message}");
+                return null;
+            }
+        }
+
+        private object ExtractMeshDataFromExported(Renga.IExportedObject3D exportedObj3D)
+        {
+            try
+            {
+                if (exportedObj3D == null)
+                    return null;
+
+                var meshArray = new List<object>();
+                int meshCount = exportedObj3D.MeshCount;
+                
+                LogToFile($"Extracting mesh from exported object, mesh count: {meshCount}");
+                
+                for (int i = 0; i < meshCount; i++)
+                {
+                    try
+                    {
+                        var mesh = exportedObj3D.GetMesh(i);
+                        if (mesh == null)
+                            continue;
+
+                        // Get mesh type
+                        var meshType = mesh.MeshType;
+                        string meshTypeStr = meshType.ToString();
+                        
+                        var gridsList = new List<object>();
+                        
+                        // Get grids from mesh
+                        int gridCount = mesh.GridCount;
+                        for (int j = 0; j < gridCount; j++)
+                        {
+                            try
+                            {
+                                var gridObj = mesh.GetGrid(j);
+                                if (gridObj == null)
+                                    continue;
+
+                                var gridData = new Dictionary<string, object>();
+                                var vertices = new List<object>();
+                                var triangles = new List<object>();
+
+                                // Get grid type (for walls: FrontSide, BackSide, Bottom, Top, etc.)
+                                var gridType = gridObj.GridType;
+                                gridData["gridType"] = gridType.ToString();
+                                
+                                // Get vertices from grid
+                                int vertexCount = gridObj.VertexCount;
+                                for (int v = 0; v < vertexCount; v++)
+                                {
+                                    var vertex = gridObj.GetVertex(v);
+                                    vertices.Add(new { x = vertex.X, y = vertex.Y, z = vertex.Z });
+                                }
+
+                                // Get triangles from grid
+                                int triangleCount = gridObj.TriangleCount;
+                                for (int t = 0; t < triangleCount; t++)
+                                {
+                                    var triangle = gridObj.GetTriangle(t);
+                                    // Triangle has V0, V1, V2 properties (indices as uint)
+                                    triangles.Add(new int[] { (int)triangle.V0, (int)triangle.V1, (int)triangle.V2 });
+                                }
+                                
+                                if (vertices.Count > 0)
+                                {
+                                    gridData["vertices"] = vertices;
+                                    gridData["triangles"] = triangles;
+                                    gridsList.Add(gridData);
+                                    LogToFile($"Grid {j} (type: {gridType}): {vertices.Count} vertices, {triangles.Count} triangles");
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                LogToFile($"Error extracting grid {j}: {ex.Message}");
+                            }
+                        }
+
+                        if (gridsList.Count > 0)
+                        {
+                            var meshData = new Dictionary<string, object>
+                            {
+                                ["meshType"] = meshTypeStr,
+                                ["grids"] = gridsList
+                            };
+                            meshArray.Add(meshData);
+                            LogToFile($"Mesh {i} (type: {meshTypeStr}) extracted: {gridsList.Count} grids");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Error extracting mesh {i}: {ex.Message}");
+                    }
+                }
+
+                return meshArray.Count > 0 ? meshArray : null;
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Error extracting mesh from exported object: {ex.Message}\n{ex.StackTrace}");
                 return null;
             }
         }

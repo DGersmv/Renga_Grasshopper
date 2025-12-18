@@ -49,13 +49,16 @@
       <RengaPluginsPath>C:\Program Files\Renga Standard\Plugins\$(TargetName)</RengaPluginsPath>
     </PropertyGroup>
     <MakeDir Directories="$(RengaPluginsPath)" Condition="!Exists('$(RengaPluginsPath)')" />
-    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(RengaPluginsPath)" />
-    <Copy SourceFiles="$(TargetDir)$(TargetName).rndesc" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)$(TargetName).rndesc')" />
-    <Copy SourceFiles="$(TargetDir)$(TargetName)Icon.png" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)$(TargetName)Icon.png')" />
-    <Copy SourceFiles="$(TargetDir)Interop.Renga.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Interop.Renga.dll')" />
-    <Copy SourceFiles="$(TargetDir)Renga.NET8.PluginUtility.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Renga.NET8.PluginUtility.dll')" />
-    <Copy SourceFiles="$(TargetDir)Newtonsoft.Json.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Newtonsoft.Json.dll')" />
-    <Message Text="RengaGH.dll and dependencies copied to $(RengaPluginsPath)" Importance="high" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(RengaPluginsPath)" ContinueOnError="true">
+      <Output TaskParameter="CopiedFiles" ItemName="CopiedFiles" />
+    </Copy>
+    <Copy SourceFiles="$(TargetDir)$(TargetName).rndesc" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)$(TargetName).rndesc')" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName)Icon.png" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)$(TargetName)Icon.png')" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetDir)Interop.Renga.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Interop.Renga.dll')" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetDir)Renga.NET8.PluginUtility.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Renga.NET8.PluginUtility.dll')" ContinueOnError="true" />
+    <Copy SourceFiles="$(TargetDir)Newtonsoft.Json.dll" DestinationFolder="$(RengaPluginsPath)" Condition="Exists('$(TargetDir)Newtonsoft.Json.dll')" ContinueOnError="true" />
+    <Message Text="RengaGH.dll and dependencies copied to $(RengaPluginsPath)" Importance="high" Condition="Exists('$(RengaPluginsPath)\$(TargetName).dll')" />
+    <Warning Text="Failed to copy RengaGH.dll to $(RengaPluginsPath). You may need to run as Administrator or copy manually." Condition="!Exists('$(RengaPluginsPath)\$(TargetName).dll')" />
   </Target>
 </Project>
 
