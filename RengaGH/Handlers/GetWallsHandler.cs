@@ -406,28 +406,102 @@ namespace RengaPlugin.Handlers
                             if (baseline3D == null || sampledPoints == null || sampledPoints.Count <= 2)
                             {
                                 if (baseline3D == null)
-                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned null, using trigonometric calculation");
+                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned null, using trigonometric calculation with IArc2D API methods");
                                 else
-                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned insufficient points, using trigonometric calculation");
+                                    LogToFile($"Wall {wallObj.Id}: CreateCurve3D returned insufficient points, using trigonometric calculation with IArc2D API methods");
                                 
-                                // Calculate angles from actual start and end points
-                                double startAngle = Math.Atan2(startPoint2D.Y - center2D.Y, startPoint2D.X - center2D.X);
-                                double endAngle = Math.Atan2(endPoint2D.Y - center2D.Y, endPoint2D.X - center2D.X);
+                                // CRITICAL: Use IArc2D API methods for accurate angle and direction
+                                // GetBeginGlobalAngle() and GetEndGlobalAngle() return angles in global coordinate system
+                                // IsClockwise() returns the actual direction of the arc
+                                double startAngle = 0.0;
+                                double endAngle = 0.0;
+                                bool isClockwise = false;
                                 
-                                // CRITICAL: Do NOT choose shortest arc - preserve direction
-                                // If endAngle < startAngle, we need to go the long way (add 2π)
-                                if (endAngle < startAngle)
+                                try
+                                {
+                                    // Get angles from IArc2D API (in global coordinate system)
+                                    startAngle = arc2D.GetBeginGlobalAngle();
+                                    endAngle = arc2D.GetEndGlobalAngle();
+                                    // FIX: Invert IsClockwise() because baseline was building in opposite direction
+                                    // Renga's IsClockwise() seems to return direction relative to some other reference
+                                    // We need to invert it to match the actual wall baseline direction
+                                    isClockwise = !arc2D.IsClockwise();
+                                    
+                                    LogToFile($"Wall {wallObj.Id}: IArc2D API - startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), isClockwise={isClockwise} (inverted from API)");
+                                }
+                                catch (Exception ex)
+                                {
+                                    LogToFile($"Wall {wallObj.Id}: Error getting angles from IArc2D API: {ex.Message}. Falling back to Math.Atan2");
+                                    
+                                    // Fallback: Calculate angles from actual start and end points
+                                    startAngle = Math.Atan2(startPoint2D.Y - center2D.Y, startPoint2D.X - center2D.X);
+                                    endAngle = Math.Atan2(endPoint2D.Y - center2D.Y, endPoint2D.X - center2D.X);
+                                    
+                                    // Try to determine direction from angle difference
+                                    double angleDiffFallback = endAngle - startAngle;
+                                    if (angleDiffFallback < 0)
+                                        angleDiffFallback += 2 * Math.PI;
+                                    
+                                    // If angle difference > π, it's likely going the long way (counter-clockwise)
+                                    isClockwise = (angleDiffFallback <= Math.PI);
+                                    
+                                    LogToFile($"Wall {wallObj.Id}: Calculated from points - startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), inferred isClockwise={isClockwise}");
+                                }
+                                
+                                // CRITICAL: Adjust angles based on direction to preserve the actual wall baseline
+                                // FIX: Baseline was building in opposite direction, so we need to invert the logic
+                                // If counter-clockwise (isClockwise == false), we typically need endAngle > startAngle
+                                // If clockwise (isClockwise == true), we typically need endAngle < startAngle
+                                // But if angles cross the 0/2π boundary, we need to adjust
+                                
+                                double angleDiff = endAngle - startAngle;
+                                
+                                // Normalize angleDiff to [-π, π] range
+                                while (angleDiff > Math.PI)
+                                    angleDiff -= 2 * Math.PI;
+                                while (angleDiff < -Math.PI)
+                                    angleDiff += 2 * Math.PI;
+                                
+                                // For counter-clockwise arcs (isClockwise == false), angleDiff should be positive
+                                // For clockwise arcs (isClockwise == true), angleDiff should be negative
+                                // If the sign doesn't match, we need to go the long way (add/subtract 2π)
+                                if (!isClockwise && angleDiff < 0)
+                                {
+                                    // Counter-clockwise but going negative direction - need to go the long way
                                     endAngle += 2 * Math.PI;
+                                    LogToFile($"Wall {wallObj.Id}: Counter-clockwise arc, adjusted endAngle to {endAngle} ({endAngle * 180 / Math.PI}°) to go long way");
+                                }
+                                else if (isClockwise && angleDiff > 0)
+                                {
+                                    // Clockwise but going positive direction - need to go the long way
+                                    endAngle -= 2 * Math.PI;
+                                    LogToFile($"Wall {wallObj.Id}: Clockwise arc, adjusted endAngle to {endAngle} ({endAngle * 180 / Math.PI}°) to go long way");
+                                }
                                 
-                                LogToFile($"Wall {wallObj.Id}: Arc center=({center2D.X}, {center2D.Y}), radius={radius}, startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°)");
+                                LogToFile($"Wall {wallObj.Id}: Arc center=({center2D.X}, {center2D.Y}), radius={radius}, startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), isClockwise={isClockwise}");
 
-                                // Sample points following the actual direction (not shortest)
+                                // CRITICAL FIX: ALWAYS invert direction - baseline was building on wrong side
+                                // Simply swap start and end angles to build in opposite direction
                                 sampledPoints = new List<Dictionary<string, object>>();
                                 int arcSamples = 50;
+                                
+                                // ALWAYS swap start and end angles to invert direction
+                                double actualStartAngle = endAngle;
+                                double actualEndAngle = startAngle;
+                                
+                                // Calculate sweep angle (will be negative, which is fine)
+                                double sweepAngle = actualEndAngle - actualStartAngle;
+                                
+                                // Normalize sweep angle to [0, 2π] range
+                                if (sweepAngle < 0)
+                                    sweepAngle += 2 * Math.PI;
+                                
+                                LogToFile($"Wall {wallObj.Id}: ALWAYS INVERTED - Building arc from {actualStartAngle * 180 / Math.PI}° to {actualEndAngle * 180 / Math.PI}°, sweep={sweepAngle * 180 / Math.PI}° (swapped from original start={startAngle * 180 / Math.PI}°, end={endAngle * 180 / Math.PI}°)");
+                                
                                 for (int i = 0; i <= arcSamples; i++)
                                 {
                                     double t = (double)i / arcSamples;
-                                    double angle = startAngle + (endAngle - startAngle) * t;
+                                    double angle = actualStartAngle + sweepAngle * t;
                                     var point2D = new Renga.Point2D
                                     {
                                         X = center2D.X + radius * Math.Cos(angle),
