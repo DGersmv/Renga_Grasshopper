@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using Rhino.Geometry;
-using GrasshopperRNG.Connection;
+using SverchokRenga.Connection;
 using Newtonsoft.Json.Linq;
 
-namespace GrasshopperRNG.Commands
+namespace SverchokRenga.Commands
 {
     /// <summary>
     /// Command for creating/updating columns in Renga

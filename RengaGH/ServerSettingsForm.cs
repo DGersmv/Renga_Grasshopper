@@ -43,7 +43,7 @@ namespace RengaPlugin
             this.SuspendLayout();
 
             // Form properties
-            this.Text = "Renga_Grasshopper Server Settings";
+            this.Text = "Renga_Sverchok Server Settings";
             this.Size = new Size(350, 180);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;

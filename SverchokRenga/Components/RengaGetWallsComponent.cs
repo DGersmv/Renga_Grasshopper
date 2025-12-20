@@ -5,11 +5,11 @@ using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using Grasshopper.Kernel.Types;
 using Rhino.Geometry;
-using GrasshopperRNG.Connection;
-using GrasshopperRNG.Commands;
+using SverchokRenga.Connection;
+using SverchokRenga.Commands;
 using Newtonsoft.Json.Linq;
 
-namespace GrasshopperRNG.Components
+namespace SverchokRenga.Components
 {
     /// <summary>
     /// Component for getting walls from Renga

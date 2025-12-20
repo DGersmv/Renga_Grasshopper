@@ -1,16 +1,17 @@
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using Grasshopper.GUI.Canvas;
 using Grasshopper.Kernel.Attributes;
 
-namespace GrasshopperRNG.Components
+namespace SverchokRenga.Components
 {
     /// <summary>
-    /// Custom attributes for RengaCreateColumnsComponent
+    /// Custom attributes for RengaConnectComponent with Update button
     /// </summary>
-    public class RengaCreateColumnsComponentAttributes : GH_ComponentAttributes
+    public class RengaConnectComponentAttributes : GH_ComponentAttributes
     {
-        public RengaCreateColumnsComponentAttributes(RengaCreateColumnsComponent owner) : base(owner)
+        public RengaConnectComponentAttributes(RengaConnectComponent owner) : base(owner)
         {
         }
 
@@ -24,5 +25,8 @@ namespace GrasshopperRNG.Components
             // Render base component
             base.Render(canvas, graphics, channel);
         }
+
+
     }
 }
+

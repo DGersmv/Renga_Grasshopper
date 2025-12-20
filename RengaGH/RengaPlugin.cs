@@ -1,7 +1,8 @@
-/*  Renga_Grasshopper Integration Plugin
+/*  Renga_Sverchok Integration Plugin
  *
- *  This plugin creates a TCP server to receive data from Grasshopper
+ *  This plugin creates a TCP server to receive data from Sverchok (Blender)
  *  and creates/updates columns in Renga based on point coordinates.
+ *  Also provides walls data to Sverchok.
  *
  *  Copyright Renga Software LLC, 2025. All rights reserved.
  */
@@ -99,7 +100,7 @@ namespace RengaPlugin
                 {
                     m_app.UI.ShowMessageBox(
                         Renga.MessageIcon.MessageIcon_Error,
-                        "Renga_Grasshopper Plugin",
+                        "Renga_Sverchok Plugin",
                         $"Invalid port number: {port}. Port must be in range 1024-65535.");
                     return;
                 }

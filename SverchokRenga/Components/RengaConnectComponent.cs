@@ -3,9 +3,9 @@ using System.Drawing;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Attributes;
 using Grasshopper.Kernel.Parameters;
-using GrasshopperRNG.Connection;
+using SverchokRenga.Connection;
 
-namespace GrasshopperRNG.Components
+namespace SverchokRenga.Components
 {
     /// <summary>
     /// Component for connecting to Renga TCP server

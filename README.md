@@ -1,100 +1,99 @@
-# Renga_Grasshopper Integration
+# Renga_Sverchok Integration
 
-Интеграция между Grasshopper и Renga для автоматического размещения колонн в Renga на основе точек, заданных в Grasshopper.
+Интеграция между Sverchok (Blender) и Renga для автоматического размещения колонн в Renga на основе точек, заданных в Sverchok, и получения стен из Renga.
 
 ## Описание проекта
 
-Проект состоит из двух плагинов:
-- **Плагин Renga** - TCP сервер, который принимает данные от Grasshopper и создает/обновляет колонны
-- **Плагин Grasshopper** - два компонента для подключения к Renga и отправки данных о колоннах
+Проект состоит из двух частей:
+- **Плагин Renga** (C#) - TCP сервер, который принимает данные от Sverchok и создает/обновляет колонны, а также отправляет данные о стенах
+- **Ноды Sverchok** (Python) - три ноды для подключения к Renga, создания колонн и получения стен
 
 ## Структура проекта
 
 ```
-Renga_Grasshopper/
-├── Renga/              # Плагин для Renga
+Renga_Sverchok/
+├── RengaGH/              # Плагин для Renga (TCP сервер)
 │   ├── RengaPlugin.cs
-│   ├── Renga.csproj
-│   └── Renga.rndesc
-├── Grasshopper/        # Плагин для Grasshopper
-│   ├── Components/
-│   │   ├── RengaConnectComponent.cs
-│   │   └── RengaCreateColumnsComponent.cs
-│   ├── Client/
-│   │   └── RengaGhClient.cs
-│   ├── Properties/
-│   │   ├── AssemblyInfo.cs
-│   │   └── GrasshopperInfo.cs
-│   └── Grasshopper.csproj
-└── Renga_Grasshopper.sln
+│   ├── RengaGH.csproj
+│   └── RengaGH.rndesc
+└── nodes/renga/          # Ноды для Sverchok (Python)
+    ├── renga_connect.py
+    ├── renga_create_columns.py
+    ├── renga_get_walls.py
+    ├── renga_client.py
+    ├── connection_protocol.py
+    └── commands.py
 ```
 
 ## Требования
 
 - **Renga SDK** - установлен в стандартном месте
-- **Rhino 8** с Grasshopper
-- **Visual Studio 2022** или новее
+- **Blender** с установленным аддоном **Sverchok**
+- **Visual Studio 2022** или новее (для сборки плагина Renga)
 - **.NET 8.0** (для плагина Renga)
-- **.NET Framework 4.8** (для плагина Grasshopper)
+- **Python 3.x** (встроен в Blender)
 
 ## Сборка проекта
 
+### Плагин Renga
+
 1. Откройте `Renga_Grasshopper.sln` в Visual Studio
-2. Убедитесь, что пути к библиотекам Grasshopper и RhinoCommon корректны в `Grasshopper.csproj`
-3. Соберите решение (Build Solution)
+2. Соберите решение (Build Solution)
+3. После сборки скопируйте `RengaGH.dll` и `RengaGH.rndesc` из `bin\Release\RengaGH\` в папку плагинов Renga
+4. Перезапустите Renga
 
-### Установка плагина Renga
+### Ноды Sverchok
 
-После сборки:
-1. Скопируйте `Renga.dll` и `Renga.rndesc` из `bin\Release\Renga\` в папку плагинов Renga
-2. Перезапустите Renga
+Ноды Sverchok уже находятся в папке:
+```
+C:\Program Files\Renga Standard\RengaSDK\Sverchok\nodes\renga\
+```
 
-### Установка плагина Grasshopper
-
-После сборки плагин автоматически копируется в `%APPDATA%\Grasshopper\Libraries\` (благодаря PostBuildEvent).
-Или скопируйте `Renga_Grasshopper.gha` вручную.
+Они автоматически обнаружатся Sverchok при перезапуске Blender.
 
 ## Использование
 
 ### В Renga:
-1. Плагин автоматически запускает TCP сервер на порту 50100 при загрузке
-2. (TODO: Добавить UI для настройки порта и управления сервером)
 
-### В Grasshopper:
-1. Добавьте компонент **"Renga Connect"**:
+1. Запустите Renga с установленным плагином RengaGH
+2. Откройте меню плагина и нажмите "Server Settings"
+3. Запустите TCP сервер на порту 50100 (по умолчанию)
+4. Сервер будет принимать подключения от Sverchok
+
+### В Sverchok (Blender):
+
+1. Добавьте ноду **"Renga Connect"**:
    - Укажите порт (по умолчанию 50100)
-   - Включите подключение (Connect = true)
-2. Добавьте компонент **"Renga Create Columns"**:
+   - Включите подключение (Connect = True)
+2. Добавьте ноду **"Renga Create Columns"**:
    - Подключите точки (Points)
-   - Подключите выход Client от компонента "Renga Connect"
-   - Компонент автоматически отправит данные в Renga
+   - Подключите выход Client от ноды "Renga Connect" (опционально)
+   - Установите высоту колонн (по умолчанию 3000 мм)
+   - Установите Update = True для отправки данных в Renga
+3. Добавьте ноду **"Renga Get Walls"**:
+   - Подключите выход Client от ноды "Renga Connect" (опционально)
+   - Установите Update = True для получения стен из Renga
 
 ## Функциональность
 
-- ✅ Создание колонн в Renga на основе точек из Grasshopper
+- ✅ Создание колонн в Renga на основе точек из Sverchok
 - ✅ Отслеживание точек по GUID для обновления позиций
-- ✅ Автоматическое обновление при изменении точек
+- ✅ Получение стен из Renga в Sverchok (кривые и меши)
 - ✅ Не создает дубликаты колонн для существующих точек
-- ⏳ UI для настройки порта в Renga (в разработке)
-- ⏳ Кнопки Update в компонентах Grasshopper (в разработке)
+- ✅ UI для настройки порта в Renga
 
 ## Технические детали
 
 - **Протокол**: TCP/IP
 - **Порт по умолчанию**: 50100
-- **Формат данных**: JSON
+- **Формат данных**: JSON с длиной сообщения (4 байта big-endian + JSON)
 - **Отслеживание**: GUID точек для синхронизации колонн
+
+## Команды протокола
+
+- `update_points` - создание/обновление колонн в Renga
+- `get_walls` - получение стен из Renga
 
 ## Лицензия
 
 Copyright © 2025 Renga Software LLC. All rights reserved.
-
-
-
-
-
-
-
-
-
-

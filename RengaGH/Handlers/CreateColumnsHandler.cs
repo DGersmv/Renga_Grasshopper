@@ -46,7 +46,7 @@ namespace RengaPlugin.Handlers
                         success = pointResult.Success,
                         message = pointResult.Message,
                         columnId = pointResult.ColumnId,
-                        grasshopperGuid = pointResult.GrasshopperGuid
+                        clientGuid = pointResult.ClientGuid
                     });
                 }
 
@@ -86,21 +86,24 @@ namespace RengaPlugin.Handlers
                 var y = pointObj["y"]?.Value<double>() ?? 0;
                 var z = pointObj["z"]?.Value<double>() ?? 0;
                 var height = pointObj["height"]?.Value<double>() ?? 3000.0;
-                var grasshopperGuid = pointObj["grasshopperGuid"]?.ToString();
+                // Support both old "grasshopperGuid" and new "clientGuid"/"sverchokGuid" for backward compatibility
+                var clientGuid = pointObj["grasshopperGuid"]?.ToString() 
+                    ?? pointObj["clientGuid"]?.ToString() 
+                    ?? pointObj["sverchokGuid"]?.ToString();
                 var rengaColumnGuid = pointObj["rengaColumnGuid"]?.ToString();
 
-                if (string.IsNullOrEmpty(grasshopperGuid))
+                if (string.IsNullOrEmpty(clientGuid))
                 {
-                    return new PointResult { Success = false, Message = "Missing grasshopperGuid" };
+                    return new PointResult { Success = false, Message = "Missing client GUID" };
                 }
 
                 // Check if column already exists
                 int columnId = 0;
                 bool columnExists = false;
 
-                if (guidToColumnIdMap.ContainsKey(grasshopperGuid))
+                if (guidToColumnIdMap.ContainsKey(clientGuid))
                 {
-                    columnId = guidToColumnIdMap[grasshopperGuid];
+                    columnId = guidToColumnIdMap[clientGuid];
                     // Verify column actually exists in Renga
                     if (ColumnExistsInRenga(columnId))
                     {
@@ -109,7 +112,7 @@ namespace RengaPlugin.Handlers
                     else
                     {
                         // Column was deleted in Renga, remove from map
-                        guidToColumnIdMap.Remove(grasshopperGuid);
+                        guidToColumnIdMap.Remove(clientGuid);
                     }
                 }
                 else if (!string.IsNullOrEmpty(rengaColumnGuid))
@@ -126,18 +129,18 @@ namespace RengaPlugin.Handlers
                             {
                                 guidToColumnIdMap.Remove(existingKey);
                             }
-                            guidToColumnIdMap[grasshopperGuid] = parsedId;
+                            guidToColumnIdMap[clientGuid] = parsedId;
                         }
                     }
                 }
 
                 if (columnExists)
                 {
-                    return UpdateColumn(columnId, x, y, z, height, grasshopperGuid);
+                    return UpdateColumn(columnId, x, y, z, height, clientGuid);
                 }
                 else
                 {
-                    return CreateColumn(x, y, z, height, grasshopperGuid);
+                    return CreateColumn(x, y, z, height, clientGuid);
                 }
             }
             catch (Exception ex)
@@ -146,7 +149,7 @@ namespace RengaPlugin.Handlers
             }
         }
 
-        private PointResult CreateColumn(double x, double y, double z, double height, string grasshopperGuid)
+        private PointResult CreateColumn(double x, double y, double z, double height, string clientGuid)
         {
             try
             {
@@ -216,14 +219,14 @@ namespace RengaPlugin.Handlers
                 op.Apply();
 
                 int columnId = (column as Renga.IModelObject).Id;
-                guidToColumnIdMap[grasshopperGuid] = columnId;
+                guidToColumnIdMap[clientGuid] = columnId;
 
                 return new PointResult
                 {
                     Success = true,
                     Message = "Column created",
                     ColumnId = columnId.ToString(),
-                    GrasshopperGuid = grasshopperGuid
+                    ClientGuid = clientGuid
                 };
             }
             catch (Exception ex)
@@ -232,7 +235,7 @@ namespace RengaPlugin.Handlers
             }
         }
 
-        private PointResult UpdateColumn(int columnId, double x, double y, double z, double height, string grasshopperGuid)
+        private PointResult UpdateColumn(int columnId, double x, double y, double z, double height, string clientGuid)
         {
             try
             {
@@ -296,7 +299,7 @@ namespace RengaPlugin.Handlers
                     Success = true,
                     Message = "Column updated",
                     ColumnId = columnId.ToString(),
-                    GrasshopperGuid = grasshopperGuid
+                    ClientGuid = clientGuid
                 };
             }
             catch (Exception ex)
@@ -356,7 +359,7 @@ namespace RengaPlugin.Handlers
         public bool Success { get; set; }
         public string Message { get; set; } = "";
         public string? ColumnId { get; set; }
-        public string? GrasshopperGuid { get; set; }
+        public string? ClientGuid { get; set; }
     }
 }
 

@@ -1,7 +1,7 @@
-using GrasshopperRNG.Connection;
+using SverchokRenga.Connection;
 using Newtonsoft.Json.Linq;
 
-namespace GrasshopperRNG.Commands
+namespace SverchokRenga.Commands
 {
     /// <summary>
     /// Command for getting walls from Renga

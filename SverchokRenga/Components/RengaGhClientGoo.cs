@@ -1,9 +1,9 @@
 using System;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Types;
-using GrasshopperRNG.Connection;
+using SverchokRenga.Connection;
 
-namespace GrasshopperRNG.Components
+namespace SverchokRenga.Components
 {
     /// <summary>
     /// GH_Goo wrapper for RengaConnectionClient to pass between components

@@ -7,7 +7,7 @@ using System.IO;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace GrasshopperRNG.Client
+namespace SverchokRenga.Client
 {
     /// <summary>
     /// TCP client for communicating with Renga plugin

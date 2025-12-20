@@ -7,8 +7,8 @@
     <ProjectGuid>{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>GrasshopperRNG</RootNamespace>
-    <AssemblyName>GrasshopperRNG</AssemblyName>
+    <RootNamespace>SverchokRenga</RootNamespace>
+    <AssemblyName>SverchokRenga</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
@@ -82,8 +82,8 @@
   <!-- Post-build event to copy to Grasshopper libraries -->
   <PropertyGroup>
     <PostBuildEvent>if not exist "%25APPDATA%\Grasshopper\Libraries" mkdir "%25APPDATA%\Grasshopper\Libraries"
-copy /Y "$(TargetPath)" "%25APPDATA%\Grasshopper\Libraries\GrasshopperRNG.gha"
-echo GrasshopperRNG.gha copied to Grasshopper Libraries</PostBuildEvent>
+copy /Y "$(TargetPath)" "%25APPDATA%\Grasshopper\Libraries\SverchokRenga.gha"
+echo SverchokRenga.gha copied to Grasshopper Libraries</PostBuildEvent>
   </PropertyGroup>
 </Project>
 

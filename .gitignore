@@ -16,6 +16,7 @@ bld/
 # Visual Studio cache/options directory
 .vs/
 .vscode/
+.cursor/
 
 # User-specific files
 *.rsuser
@@ -25,16 +26,16 @@ bld/
 *.sln.docstates
 
 # Build results
-[Dd]ebug/
-[Rr]elease/
 *.dll
 *.pdb
 *.exe
 *.gha
+*.rndesc
 
 # NuGet Packages
 *.nupkg
 packages/
+.nuget/
 
 # Visual Studio profiler
 *.psess
@@ -51,11 +52,21 @@ _ReSharper*/
 .idea/
 *.sln.iml
 
-# User-specific files
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Blender
+*.blend1
+*.blend2
+
+# Temporary files
+*.tmp
+*.temp
+build
 
 
 

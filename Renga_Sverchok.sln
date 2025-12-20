@@ -4,8 +4,6 @@ VisualStudioVersion = 17.6.33712.159
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "RengaGH", "RengaGH\RengaGH.csproj", "{F1A2B3C4-D5E6-7890-FABC-DEF123456789}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GrasshopperRNG", "GrasshopperRNG\GrasshopperRNG.csproj", "{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -16,12 +14,9 @@ Global
 		{F1A2B3C4-D5E6-7890-FABC-DEF123456789}.Debug|x64.Build.0 = Debug|x64
 		{F1A2B3C4-D5E6-7890-FABC-DEF123456789}.Release|x64.ActiveCfg = Release|x64
 		{F1A2B3C4-D5E6-7890-FABC-DEF123456789}.Release|x64.Build.0 = Release|x64
-		{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}.Debug|x64.ActiveCfg = Debug|AnyCPU
-		{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}.Debug|x64.Build.0 = Debug|AnyCPU
-		{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}.Release|x64.ActiveCfg = Release|AnyCPU
-		{E5F6A7B8-C9D0-1234-EFAB-CDEF12345678}.Release|x64.Build.0 = Release|AnyCPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal
+

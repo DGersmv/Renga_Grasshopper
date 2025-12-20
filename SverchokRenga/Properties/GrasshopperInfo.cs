@@ -2,7 +2,7 @@ using Grasshopper.Kernel;
 using System;
 using System.Drawing;
 
-namespace GrasshopperRNG.Properties
+namespace SverchokRenga.Properties
 {
     /// <summary>
     /// Assembly info for Grasshopper plugin registration
