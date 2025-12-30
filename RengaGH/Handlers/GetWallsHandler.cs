@@ -137,6 +137,12 @@ namespace RengaPlugin.Handlers
                                     meshData = ExtractMeshDataFromExported(exportedObj3D);
                                 }
                                 
+                                // Get wall parameters interface
+                                var wallParams = obj as Renga.IWallParams;
+                                
+                                // Extract wall properties
+                                object properties = ExtractWallProperties(obj, wall, wallParams);
+                                
                                 var wallData = new
                                 {
                                     id = obj.Id,
@@ -150,7 +156,8 @@ namespace RengaPlugin.Handlers
                                     height = height,
                                     thickness = thickness,
                                     baseline = baselineData,
-                                    mesh = meshData
+                                    mesh = meshData,
+                                    properties = properties
                                 };
                                 walls.Add(wallData);
                             }
@@ -422,12 +429,10 @@ namespace RengaPlugin.Handlers
                                     // Get angles from IArc2D API (in global coordinate system)
                                     startAngle = arc2D.GetBeginGlobalAngle();
                                     endAngle = arc2D.GetEndGlobalAngle();
-                                    // FIX: Invert IsClockwise() because baseline was building in opposite direction
-                                    // Renga's IsClockwise() seems to return direction relative to some other reference
-                                    // We need to invert it to match the actual wall baseline direction
-                                    isClockwise = !arc2D.IsClockwise();
+                                    // Use IsClockwise() directly from API - no inversion
+                                    isClockwise = arc2D.IsClockwise();
                                     
-                                    LogToFile($"Wall {wallObj.Id}: IArc2D API - startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), isClockwise={isClockwise} (inverted from API)");
+                                    LogToFile($"Wall {wallObj.Id}: IArc2D API - startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), isClockwise={isClockwise}");
                                 }
                                 catch (Exception ex)
                                 {
@@ -480,28 +485,33 @@ namespace RengaPlugin.Handlers
                                 
                                 LogToFile($"Wall {wallObj.Id}: Arc center=({center2D.X}, {center2D.Y}), radius={radius}, startAngle={startAngle} ({startAngle * 180 / Math.PI}°), endAngle={endAngle} ({endAngle * 180 / Math.PI}°), isClockwise={isClockwise}");
 
-                                // CRITICAL FIX: ALWAYS invert direction - baseline was building on wrong side
-                                // Simply swap start and end angles to build in opposite direction
+                                // Use angles directly from API without inversion
                                 sampledPoints = new List<Dictionary<string, object>>();
                                 int arcSamples = 50;
                                 
-                                // ALWAYS swap start and end angles to invert direction
-                                double actualStartAngle = endAngle;
-                                double actualEndAngle = startAngle;
+                                // Calculate sweep angle based on direction
+                                double sweepAngle = endAngle - startAngle;
                                 
-                                // Calculate sweep angle (will be negative, which is fine)
-                                double sweepAngle = actualEndAngle - actualStartAngle;
+                                // Normalize sweep angle based on direction
+                                if (isClockwise)
+                                {
+                                    // For clockwise arcs, sweep should be negative
+                                    if (sweepAngle > 0)
+                                        sweepAngle -= 2 * Math.PI;
+                                }
+                                else
+                                {
+                                    // For counter-clockwise arcs, sweep should be positive
+                                    if (sweepAngle < 0)
+                                        sweepAngle += 2 * Math.PI;
+                                }
                                 
-                                // Normalize sweep angle to [0, 2π] range
-                                if (sweepAngle < 0)
-                                    sweepAngle += 2 * Math.PI;
-                                
-                                LogToFile($"Wall {wallObj.Id}: ALWAYS INVERTED - Building arc from {actualStartAngle * 180 / Math.PI}° to {actualEndAngle * 180 / Math.PI}°, sweep={sweepAngle * 180 / Math.PI}° (swapped from original start={startAngle * 180 / Math.PI}°, end={endAngle * 180 / Math.PI}°)");
+                                LogToFile($"Wall {wallObj.Id}: Building arc from {startAngle * 180 / Math.PI}° to {endAngle * 180 / Math.PI}°, sweep={sweepAngle * 180 / Math.PI}°, isClockwise={isClockwise}");
                                 
                                 for (int i = 0; i <= arcSamples; i++)
                                 {
                                     double t = (double)i / arcSamples;
-                                    double angle = actualStartAngle + sweepAngle * t;
+                                    double angle = startAngle + sweepAngle * t;
                                     var point2D = new Renga.Point2D
                                     {
                                         X = center2D.X + radius * Math.Cos(angle),
@@ -901,6 +911,228 @@ namespace RengaPlugin.Handlers
             {
                 LogToFile($"Error extracting mesh from exported object: {ex.Message}\n{ex.StackTrace}");
                 return null;
+            }
+        }
+
+        private object ExtractWallProperties(
+            Renga.IModelObject wallObj,
+            Renga.ILevelObject levelObject,
+            Renga.IWallParams wallParams)
+        {
+            try
+            {
+                var properties = new Dictionary<string, object>();
+                
+                // 1. Многослойная структура и материалы
+                var objectWithLayeredMaterial = wallObj as Renga.IObjectWithLayeredMaterial;
+                bool hasMultilayer = false;
+                var layers = new List<object>();
+                double totalThickness = 0;
+                var materials = new List<string>();
+                
+                if (objectWithLayeredMaterial != null)
+                {
+                    try
+                    {
+                        var layeredMaterialId = objectWithLayeredMaterial.LayeredMaterialId;
+                        if (layeredMaterialId > 0)
+                        {
+                            var project = m_app.Project;
+                            var layeredMaterialManager = project.LayeredMaterialManager;
+                            var layeredMaterial = layeredMaterialManager.GetLayeredMaterial(layeredMaterialId);
+                            
+                            if (layeredMaterial != null)
+                            {
+                                hasMultilayer = true;
+                                var layerCollection = layeredMaterial.Layers;
+                                int layerCount = layerCollection.Count;
+                                
+                                LogToFile($"Wall {wallObj.Id}: Found layered material with {layerCount} layers");
+                                
+                                for (int i = 0; i < layerCount; i++)
+                                {
+                                    var layer = layerCollection.Get(i);
+                                    double layerThickness = layer.Thickness;
+                                    string materialName = layer.Material?.Name ?? "Unknown";
+                                    
+                                    totalThickness += layerThickness;
+                                    materials.Add(materialName);
+                                    
+                                    layers.Add(new Dictionary<string, object>
+                                    {
+                                        { "index", i },
+                                        { "thickness", layerThickness },
+                                        { "material", materialName }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Error getting layered material for wall {wallObj.Id}: {ex.Message}");
+                    }
+                }
+                
+                // Если нет многослойной структуры, получить толщину из параметра
+                if (!hasMultilayer)
+                {
+                    try
+                    {
+                        var parameters = wallObj.GetParameters();
+                        if (parameters != null)
+                        {
+                            var thicknessParam = parameters.Get(Renga.ParameterIds.WallThickness);
+                            if (thicknessParam != null)
+                            {
+                                totalThickness = thicknessParam.GetDoubleValue();
+                                LogToFile($"Wall {wallObj.Id}: Using parameter thickness: {totalThickness}");
+                            }
+                            else if (wallParams != null)
+                            {
+                                totalThickness = wallParams.Thickness;
+                                LogToFile($"Wall {wallObj.Id}: Using IWallParams.Thickness: {totalThickness}");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogToFile($"Error getting thickness for wall {wallObj.Id}: {ex.Message}");
+                        if (wallParams != null)
+                            totalThickness = wallParams.Thickness;
+                    }
+                }
+                
+                properties["hasMultilayerStructure"] = hasMultilayer;
+                properties["layers"] = layers.Count > 0 ? layers : null;
+                properties["totalThickness"] = totalThickness;
+                properties["materials"] = materials;
+                
+                // 2. Положение линии привязки и смещение (из параметров)
+                string alignmentPosition = "Unknown";
+                double alignmentOffset = 0.0;
+                
+                try
+                {
+                    var parameters = wallObj.GetParameters();
+                    if (parameters != null)
+                    {
+                        // Положение линии привязки
+                        var alignmentParam = parameters.Get(Renga.ParameterIds.WallPositionRelativeToBaseline);
+                        if (alignmentParam != null)
+                        {
+                            int alignmentValue = alignmentParam.GetIntValue();
+                            switch (alignmentValue)
+                            {
+                                case 0: alignmentPosition = "Left"; break;
+                                case 1: alignmentPosition = "Center"; break;
+                                case 2: alignmentPosition = "Right"; break;
+                                case 3: alignmentPosition = "TopLeft"; break;
+                                case 4: alignmentPosition = "TopCenter"; break;
+                                case 5: alignmentPosition = "TopRight"; break;
+                                case 6: alignmentPosition = "BottomLeft"; break;
+                                case 7: alignmentPosition = "BottomCenter"; break;
+                                case 8: alignmentPosition = "BottomRight"; break;
+                                case 9: alignmentPosition = "CenterOfMass"; break;
+                                case 10: alignmentPosition = "BasePoint"; break;
+                                default: alignmentPosition = $"Unknown({alignmentValue})"; break;
+                            }
+                            LogToFile($"Wall {wallObj.Id}: Alignment position: {alignmentPosition} (value: {alignmentValue})");
+                        }
+                        
+                        // Смещение от линии привязки
+                        var offsetParam = parameters.Get(Renga.ParameterIds.WallHorizontalOffset);
+                        if (offsetParam != null)
+                        {
+                            alignmentOffset = offsetParam.GetDoubleValue();
+                            LogToFile($"Wall {wallObj.Id}: Alignment offset: {alignmentOffset}");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"Error getting alignment parameters for wall {wallObj.Id}: {ex.Message}");
+                }
+                
+                properties["alignmentLinePosition"] = alignmentPosition;
+                properties["alignmentOffset"] = alignmentOffset;
+                
+                // 3. Уровень (этаж)
+                int levelId = levelObject.LevelId;
+                string levelName = "Unknown";
+                double levelElevation = 0.0;
+                
+                try
+                {
+                    // Получить уровень через модель по LevelId
+                    var model = m_app.Project.Model;
+                    var modelObjects = model.GetObjects();
+                    var levelObj = modelObjects.GetById(levelId);
+                    
+                    if (levelObj != null && levelObj.ObjectType == Renga.ObjectTypes.Level)
+                    {
+                        var level = levelObj as Renga.ILevel;
+                        if (level != null)
+                        {
+                            levelName = level.LevelName ?? "Unknown";
+                            levelElevation = level.Elevation;
+                            LogToFile($"Wall {wallObj.Id}: Level: {levelName} (ID: {levelId}, Elevation: {levelElevation})");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"Error getting level for wall {wallObj.Id}: {ex.Message}");
+                }
+                
+                properties["levelId"] = levelId;
+                properties["levelName"] = levelName;
+                properties["levelElevation"] = levelElevation;
+                
+                // 4. Смещение от уровня этажа
+                double levelOffset = levelObject.ElevationAboveLevel;
+                properties["levelOffset"] = levelOffset;
+                LogToFile($"Wall {wallObj.Id}: Level offset: {levelOffset}");
+                
+                // 5. Высота стены (из параметра)
+                double height = 0.0;
+                try
+                {
+                    var parameters = wallObj.GetParameters();
+                    if (parameters != null)
+                    {
+                        var heightParam = parameters.Get(Renga.ParameterIds.WallHeight);
+                        if (heightParam != null)
+                        {
+                            height = heightParam.GetDoubleValue();
+                            LogToFile($"Wall {wallObj.Id}: Height from parameter: {height}");
+                        }
+                        else if (wallParams != null)
+                        {
+                            height = wallParams.Height;
+                            LogToFile($"Wall {wallObj.Id}: Height from IWallParams: {height}");
+                        }
+                    }
+                    else if (wallParams != null)
+                    {
+                        height = wallParams.Height;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"Error getting height for wall {wallObj.Id}: {ex.Message}");
+                    if (wallParams != null)
+                        height = wallParams.Height;
+                }
+                properties["height"] = height;
+                
+                LogToFile($"Wall {wallObj.Id}: Properties extracted successfully");
+                return properties;
+            }
+            catch (Exception ex)
+            {
+                LogToFile($"Error extracting wall properties for wall {wallObj.Id}: {ex.Message}\n{ex.StackTrace}");
+                return new Dictionary<string, object>(); // Return empty properties on error
             }
         }
 

@@ -44,6 +44,7 @@ namespace GrasshopperRNG.Components
             pManager.AddTextParameter("Message", "M", "Status message", GH_ParamAccess.item);
             pManager.AddCurveParameter("Baselines", "B", "Wall baseline curves", GH_ParamAccess.list);
             pManager.AddMeshParameter("Meshes", "M", "Wall mesh geometry", GH_ParamAccess.list);
+            pManager.AddGenericParameter("Properties", "P", "Wall properties", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -64,6 +65,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, "Renga Connect component not provided. Connect to Renga first.");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -107,6 +109,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, "Renga Connect component not provided. Connect to Renga first.");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -116,6 +119,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, "Renga Connect is not connected. Connect to Renga first.");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -126,6 +130,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, "Set Update to True to get walls from Renga");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -145,6 +150,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, $"Error: {ex.Message}");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -155,6 +161,7 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, errorMsg);
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
                 return;
             }
 
@@ -168,11 +175,13 @@ namespace GrasshopperRNG.Components
                     DA.SetData(1, "No walls found in response");
                     DA.SetDataList(2, new List<Curve>());
                     DA.SetDataList(3, new List<Mesh>());
+                    DA.SetDataList(4, new List<WallProperties>());
                     return;
                 }
 
                 var baselines = new List<Curve>();
                 var meshes = new List<Mesh>();
+                var propertiesList = new List<WallProperties>();
 
                 foreach (var wallToken in walls)
                 {
@@ -228,12 +237,24 @@ namespace GrasshopperRNG.Components
                             }
                         }
                     }
+                    
+                    // Process properties
+                    var propertiesObj = wall["properties"] as JObject;
+                    if (propertiesObj != null)
+                    {
+                        var properties = ParseWallProperties(wall, propertiesObj);
+                        if (properties != null)
+                        {
+                            propertiesList.Add(properties);
+                        }
+                    }
                 }
 
                 DA.SetData(0, true);
                 DA.SetData(1, $"Found {walls.Count} walls");
                 DA.SetDataList(2, baselines);
                 DA.SetDataList(3, meshes);
+                DA.SetDataList(4, propertiesList);
             }
             catch (Exception ex)
             {
@@ -242,6 +263,76 @@ namespace GrasshopperRNG.Components
                 DA.SetData(1, $"Error parsing response: {ex.Message}");
                 DA.SetDataList(2, new List<Curve>());
                 DA.SetDataList(3, new List<Mesh>());
+                DA.SetDataList(4, new List<WallProperties>());
+            }
+        }
+
+        private WallProperties ParseWallProperties(JObject wall, JObject propertiesObj)
+        {
+            try
+            {
+                var properties = new WallProperties();
+                
+                // Basic wall info
+                properties.WallId = wall["id"]?.Value<int>() ?? 0;
+                properties.WallName = wall["name"]?.Value<string>() ?? "Unknown";
+                
+                // Multilayer structure
+                properties.HasMultilayerStructure = propertiesObj["hasMultilayerStructure"]?.Value<bool>() ?? false;
+                
+                var layersArray = propertiesObj["layers"] as JArray;
+                if (layersArray != null && layersArray.Count > 0)
+                {
+                    properties.Layers = new List<LayerInfo>();
+                    foreach (var layerToken in layersArray)
+                    {
+                        var layerObj = layerToken as JObject;
+                        if (layerObj != null)
+                        {
+                            var layer = new LayerInfo
+                            {
+                                Index = layerObj["index"]?.Value<int>() ?? 0,
+                                Thickness = layerObj["thickness"]?.Value<double>() ?? 0.0,
+                                Material = layerObj["material"]?.Value<string>() ?? "Unknown"
+                            };
+                            properties.Layers.Add(layer);
+                        }
+                    }
+                }
+                
+                properties.TotalThickness = propertiesObj["totalThickness"]?.Value<double>() ?? 0.0;
+                
+                // Materials
+                var materialsArray = propertiesObj["materials"] as JArray;
+                if (materialsArray != null)
+                {
+                    properties.Materials = new List<string>();
+                    foreach (var matToken in materialsArray)
+                    {
+                        var matName = matToken?.Value<string>();
+                        if (!string.IsNullOrEmpty(matName))
+                            properties.Materials.Add(matName);
+                    }
+                }
+                
+                // Alignment
+                properties.AlignmentLinePosition = propertiesObj["alignmentLinePosition"]?.Value<string>() ?? "Unknown";
+                properties.AlignmentOffset = propertiesObj["alignmentOffset"]?.Value<double>() ?? 0.0;
+                
+                // Level
+                properties.LevelId = propertiesObj["levelId"]?.Value<int>() ?? 0;
+                properties.LevelName = propertiesObj["levelName"]?.Value<string>() ?? "Unknown";
+                properties.LevelOffset = propertiesObj["levelOffset"]?.Value<double>() ?? 0.0;
+                
+                // Height
+                properties.Height = propertiesObj["height"]?.Value<double>() ?? 0.0;
+                
+                return properties;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error parsing wall properties: {ex.Message}");
+                return null;
             }
         }
 
